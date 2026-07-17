@@ -1,53 +1,144 @@
 /**
  * src/main.ts
  *
- * Plugin entry point. Phase 1 scope: register a read-only `cd` code-block
- * processor for Reading view (§8.1) that parses the block's JSON into a
- * DiagramModel and renders it to a static SVG via the shared render.ts.
+ * Plugin entry point.
  *
- * Click-to-edit, Live Preview (CM6), the floating grid editor, ribbon/command
- * triggers, and settings arrive in later phases — see CLAUDE.md §11. Phase 1's
- * job is to confirm the Phase 1 renderer renders correctly end-to-end in a real
- * note, gated by the §6.4 side-by-side visual check.
+ * Phase 1 (done): read-only `cd` code-block processor for Reading view (§8.1),
+ * rendering a static SVG via the shared render.ts.
+ *
+ * Phase 2 (this file): the floating grid editor (§7). Wired through three
+ * triggers — ribbon icon, command palette, and the editor right-click menu —
+ * each opening the GridEditor anchored at the cursor. On commit, the draft
+ * model is serialized into a fenced `cd` block inserted at the cursor
+ * (editor.replaceRange). Click-to-reedit an existing diagram is Phase 3.
  */
 
-import { Plugin, renderMath } from "obsidian";
+import { MarkdownView, Plugin, renderMath, TFile, type App, type Editor, type MarkdownFileInfo } from "obsidian";
+import type { EditorView } from "@codemirror/view";
 
-import { parseDiagram } from "./diagram/model";
+import { parseDiagram, serializeDiagram, type DiagramModel } from "./diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "./diagram/render";
 import { resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
+import { GridEditor, freshModel } from "./editor/GridEditor";
 
 const CD_LANGUAGE = "cd";
+const FENCE = "```";
+
+/** A live grid editor instance, tracked so we never mount two at once. */
+let activeEditor: GridEditor | null = null;
 
 export default class CommutativeDiagramPlugin extends Plugin {
   onload(): void {
-    // Read-only display processor (§8.1). Parsing/rendering only — no
-    // click-to-edit interaction yet (that is Phase 3).
+    // --- Phase 1 + Phase 3: display processor (§8.1) with click-to-reedit ---
     this.registerMarkdownCodeBlockProcessor(
       CD_LANGUAGE,
       async (source, el, ctx) => {
-        await this.renderCdBlock(source, el, ctx.sourcePath);
+        await this.renderCdBlock(source, el, ctx);
       },
     );
 
-    // Style metrics are cached per detected theme (§6.4). When the theme
-    // changes, drop the cache so diagrams re-measure against the new theme's
-    // native CD rendering on next render.
+    // Drop cached style metrics on theme change (§6.4).
     this.registerEvent(this.app.workspace.on("css-change", () => {
       resetCDStyleMetricsCache();
     }));
+
+    // --- Phase 2: triggers (§7.1) ---
+    this.addRibbonIcon("grid", "Insert commutative diagram", () => {
+      this.openEditorForActiveLeaf();
+    });
+
+    this.addCommand({
+      id: "insert-commutative-diagram",
+      name: "Insert commutative diagram",
+      editorCallback: (editor: Editor, _view: MarkdownView | MarkdownFileInfo) => {
+        this.openEditor(editor);
+      },
+    });
+
+    this.registerEvent(
+      this.app.workspace.on("editor-menu", (menu, editor) => {
+        menu.addItem((item) => {
+          item.setTitle("Insert commutative diagram")
+            .setIcon("grid")
+            .onClick(() => this.openEditor(editor));
+        });
+      }),
+    );
+  }
+
+  /** Open the editor for whichever markdown editor is currently focused. */
+  private openEditorForActiveLeaf(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) return;
+    this.openEditor(view.editor);
   }
 
   /**
-   * Parse a `cd` block's source and mount the rendered SVG into `el`.
-   * Invalid JSON is surfaced inline (rather than throwing) so a malformed
-   * block doesn't break the rest of the note's rendering.
+   * Mount the grid editor anchored at the current cursor. On commit, write the
+   * serialized `cd` block at the cursor (§7.4); on discard, do nothing.
    */
-  private async renderCdBlock(source: string, el: HTMLElement, _sourcePath: string): Promise<void> {
+  private openEditor(editor: Editor): void {
+    if (activeEditor) {
+      activeEditor.close();
+      activeEditor = null;
+    }
+
+    const anchor = this.cursorAnchor(editor);
+    const cursor = editor.getCursor();
+
+    activeEditor = new GridEditor({
+      document: activeDocument(this.app),
+      model: freshModel(3, 3),
+      anchor,
+      renderLabel: makeLabelRenderer(activeDocument(this.app)),
+      onCommit: (model: DiagramModel | null) => {
+        activeEditor = null;
+        if (!model) return; // empty draft → write nothing (§7.4)
+        const block = serializeDiagram(model);
+        const fenced = `${FENCE}${CD_LANGUAGE}\n${block}\n${FENCE}\n`;
+        editor.replaceRange(fenced, cursor);
+      },
+      onDiscard: () => {
+        activeEditor = null;
+      },
+    });
+    activeEditor.mount();
+  }
+
+  /**
+   * Pixel coordinates of the cursor, for anchoring the overlay (§7.2). The
+   * Obsidian Editor wraps a CodeMirror 6 EditorView; `coordsAtPos` lives on
+   * that view, reached via the (untyped) `editor.cm` property.
+   */
+  private cursorAnchor(editor: Editor): { x: number; y: number } {
+    const cm = (editor as unknown as { cm?: EditorView }).cm;
+    const cursor = editor.getCursor();
+    if (cm) {
+      const pos = editor.posToOffset ? editor.posToOffset(cursor) : -1;
+      try {
+        const rect = cm.coordsAtPos?.(pos);
+        if (rect) return { x: rect.left, y: rect.bottom + 4 };
+      } catch {
+        // fall through to a sensible default
+      }
+    }
+    // Fallback: near the top-left of the viewport, a little inset.
+    return { x: 120, y: 160 };
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 1: read-only block rendering
+  // -------------------------------------------------------------------------
+
+  private async renderCdBlock(
+    source: string,
+    el: HTMLElement,
+    ctx: { sourcePath: string; getSectionInfo?: (el: HTMLElement) => { lineStart: number; lineEnd: number } | null },
+  ): Promise<void> {
     el.addClass("cd-diagram-wrap");
     el.empty();
 
-    let model;
+    let model: DiagramModel;
     try {
       model = parseDiagram(source);
     } catch (err) {
@@ -59,8 +150,9 @@ export default class CommutativeDiagramPlugin extends Plugin {
       return;
     }
 
+    let svg: SVGElement | null = null;
     try {
-      const svg = await renderDiagramAsync(model, {
+      svg = await renderDiagramAsync(model, {
         document: el.doc,
         // §4: labels are raw LaTeX rendered via Obsidian's built-in MathJax
         // (renderMath from the `obsidian` module), not plain text. Without this
@@ -74,8 +166,95 @@ export default class CommutativeDiagramPlugin extends Plugin {
         text: `cd: render failed — ${(err as Error).message}`,
       });
       msg.setAttribute("role", "alert");
+      return;
+    }
+
+    // Click-to-reedit (Phase 3, §8): clicking the rendered diagram reopens the
+    // grid editor pre-filled with this block's model — no underlying JSON
+    // editing, no extra button. On commit we rewrite the block's source range.
+    const section = ctx.getSectionInfo?.(el) ?? null;
+    if (svg) {
+      svg.style.cursor = "pointer";
+      svg.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.openEditorForExisting(model, ctx.sourcePath, section, svg);
+      });
     }
   }
+
+  /**
+   * Reopen the grid editor for an existing rendered `cd` block. On commit,
+   * rewrite the block's line range in the file (§8.1: getSectionInfo +
+   * vault.process). If the draft is emptied, the block is removed entirely.
+   */
+  private openEditorForExisting(
+    model: DiagramModel,
+    sourcePath: string,
+    section: { lineStart: number; lineEnd: number } | null,
+    svg: SVGElement | null,
+  ): void {
+    if (activeEditor) {
+      activeEditor.close();
+      activeEditor = null;
+    }
+    const anchor = svg ? svgRectAnchor(svg) : { x: 160, y: 160 };
+    const doc = activeDocument(this.app);
+
+    activeEditor = new GridEditor({
+      document: doc,
+      model,
+      anchor,
+      renderLabel: makeLabelRenderer(doc),
+      onCommit: async (committed: DiagramModel | null) => {
+        activeEditor = null;
+        await this.writeBlock(sourcePath, section, committed);
+      },
+      onDiscard: () => {
+        activeEditor = null;
+      },
+    });
+    activeEditor.mount();
+  }
+
+  /** Replace (or remove) a `cd` block's source range with a committed model. */
+  private async writeBlock(
+    sourcePath: string,
+    section: { lineStart: number; lineEnd: number } | null,
+    model: DiagramModel | null,
+  ): Promise<void> {
+    if (!section) return; // no reliable location → can't safely write back
+    const file = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (!(file instanceof TFile)) return;
+    const newBlock =
+      model === null
+        ? null
+        : `${FENCE}${CD_LANGUAGE}\n${serializeDiagram(model)}\n${FENCE}`;
+    await this.app.vault.process(file, (data: string) => {
+      const lines = data.split("\n");
+      const start = section.lineStart;
+      const end = section.lineEnd; // inclusive
+      const before = lines.slice(0, start);
+      const after = lines.slice(end + 1);
+      const replaced = newBlock === null ? [] : newBlock.split("\n");
+      return [...before, ...replaced, ...after].join("\n");
+    });
+  }
+}
+
+/** The document to mount overlays into (the active leaf's container). */
+function activeDocument(app: App): Document {
+  const view = app.workspace.getActiveViewOfType(MarkdownView);
+  return (view?.containerEl?.ownerDocument ?? activeWindow().document);
+}
+
+function activeWindow(): Window {
+  return typeof window !== "undefined" ? window : (globalThis as unknown as { window: Window }).window;
+}
+
+/** Anchor point (viewport coords) for an editor reopening over a diagram. */
+function svgRectAnchor(svg: SVGElement): { x: number; y: number } {
+  const rect = svg.getBoundingClientRect();
+  return { x: rect.left, y: rect.bottom + 6 };
 }
 
 /**

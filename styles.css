@@ -57,13 +57,16 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   font-size: var(--font-ui-small);
   color: var(--text-normal);
-  max-width: 90vw;
+  /* Wide enough to be a comfortable editing surface: ~90% of the viewport,
+     capped so it never touches the window edges. §7.3. */
+  width: min(900px, 90vw);
+  max-width: 95vw;
   max-height: 90vh;
   overflow: auto;
 }
@@ -95,8 +98,8 @@
 
 .cd-cell {
   position: relative;
-  min-width: 56px;
-  min-height: 36px;
+  min-width: 92px;
+  min-height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -104,7 +107,7 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: 4px;
   cursor: text;
-  padding: 2px 6px;
+  padding: 4px 8px;
   user-select: none;
 }
 
@@ -127,17 +130,20 @@
 
 .cd-cell-input {
   position: absolute;
-  inset: 2px 6px;
+  inset: 4px 8px;
   border: none;
   background: transparent;
   color: var(--text-normal);
   font: inherit;
   outline: none;
-  width: calc(100% - 12px);
+  text-align: center;
+  z-index: 2;
 }
 
 .cd-cell-preview {
   pointer-events: none;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .cd-col-header,
@@ -208,7 +214,7 @@
   cursor: pointer;
 }
 
-.cd-arrow-path.is-selected {
+.cd-arrow.is-selected .cd-arrow-path {
   stroke: var(--interactive-accent);
 }
 
@@ -265,14 +271,78 @@
   pointer-events: none;
 }
 
-/* Arrow-drag handle band around cells */
+/* Arrow-drag handle band around cells. Sits on top of the cell and captures
+   the press that begins a drag-to-draw-arrow gesture (or, on a click in place,
+   opens the label editor). When a cell is being edited, its input rises above
+   the band (z-index) so typing works normally. */
 .cd-cell-drag-band {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-}
-
-.cd-cell.is-drag-source .cd-cell-drag-band {
   pointer-events: auto;
   cursor: crosshair;
 }
+
+/* --- Phase 2: floating grid editor extras --- */
+
+.cd-editor-discard {
+  font-size: var(--font-ui-smaller);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+
+.cd-editor-discard:hover {
+  color: var(--text-error);
+  border-color: var(--background-modifier-error);
+}
+
+/* Live draft preview, rendered with the same renderer as display mode (§7). */
+.cd-editor-preview-wrap {
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: 8px;
+  margin-top: 4px;
+  overflow: auto;
+  max-width: 100%;
+}
+
+.cd-editor-preview {
+  display: flex;
+  justify-content: center;
+}
+
+.cd-editor-preview .cd-diagram-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Grid add-row / add-col buttons are grid children placed after the cells,
+   each spanning the full width on its own implicit row. */
+.cd-add-row,
+.cd-add-col {
+  font-size: 0.75em;
+  min-height: 22px;
+  padding: 0 8px;
+  align-self: center;
+  justify-self: center;
+  grid-column: 1 / -1;
+  width: max-content;
+}
+
+/* Per-row / per-col remove buttons reuse .cd-remove-btn (already styled) —
+   give the row/col variants a fixed position on the cell's outer edge. */
+.cd-row-remove {
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  right: auto;
+}
+
+.cd-col-remove {
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
