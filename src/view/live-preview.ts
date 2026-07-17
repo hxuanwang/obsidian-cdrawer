@@ -37,6 +37,7 @@ import { EditorState, type Range } from "@codemirror/state";
 
 import { parseDiagram, type DiagramModel } from "../diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "../diagram/render";
+import { attachEditAffordance } from "./edit-affordance";
 
 const CD_LANGUAGE = "cd";
 const FENCE = "```";
@@ -53,6 +54,8 @@ interface CdBlock {
 export interface LivePreviewOptions {
   /** Renders a LaTeX label to an HTML element (MathJax via renderMath). */
   renderLabel: LabelRenderer;
+  /** Reads the current click-to-edit setting (§8.3); queried per widget build. */
+  getClickToEdit: () => boolean;
   /**
    * Called when the user clicks a rendered diagram. The host opens the
    * floating grid editor prefilled with `model` and, on commit, rewrites the
@@ -237,12 +240,11 @@ class CdWidget extends WidgetType {
     if (!view.dom.isConnected) return; // editor gone
     placeholder.remove();
     if (svg) {
-      svg.style.cursor = "pointer";
-      svg.addEventListener("click", (e) => {
-        e.stopPropagation();
+      wrap.appendChild(svg);
+      // §8.3: shared click-vs-hover-to-edit affordance (same as Reading view).
+      attachEditAffordance(wrap, svg, this.opts.getClickToEdit(), () => {
         this.opts.onEdit(view, this.block, model);
       });
-      wrap.appendChild(svg);
     }
   }
 

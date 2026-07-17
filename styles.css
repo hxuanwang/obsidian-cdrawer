@@ -36,19 +36,6 @@
   font-size: 0.85em;
 }
 
-.cd-diagram-wrap.is-hover-edit .cd-edit-hint {
-  display: inline-flex;
-}
-
-.cd-edit-hint {
-  display: none;
-  align-items: center;
-  margin-left: 0.4em;
-  opacity: 0.6;
-  font-size: 0.8em;
-  vertical-align: middle;
-}
-
 /* Floating grid editor overlay */
 .cd-editor-overlay {
   position: fixed;
@@ -264,6 +251,24 @@
   min-width: 200px;
 }
 
+/* Draggable title bar for the arrow properties panel. */
+.cd-properties-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -8px -8px 2px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-weight: 600;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.cd-properties-header:active {
+  cursor: grabbing;
+}
+
 .cd-properties label {
   display: flex;
   flex-direction: column;
@@ -384,5 +389,66 @@
   color: var(--text-muted);
   opacity: 0.5;
   letter-spacing: 2px;
+}
+
+/* --- Phase 4: hover-to-edit affordance (§8.3) --- */
+
+/* Wrapper around a rendered diagram in either Reading view or Live Preview when
+   clickToEdit is OFF. The Edit button overlays the diagram and only shows on
+   hover/focus, so a reader scrolling the note can't open the editor by
+   accident. */
+.cd-diagram-wrap.cd-hover-edit,
+.cd-lp-wrap.cd-hover-edit {
+  position: relative;
+}
+
+.cd-diagram-wrap.cd-hover-edit .cd-diagram-svg,
+.cd-lp-wrap.cd-hover-edit .cd-diagram-svg {
+  /* The SVG is non-interactive in hover mode; the button is the click target. */
+  pointer-events: none;
+}
+
+.cd-edit-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-on-accent);
+  background: var(--interactive-accent);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.92;
+  z-index: 2;
+}
+
+.cd-hover-edit:hover .cd-edit-btn,
+.cd-edit-btn:focus-visible {
+  display: inline-flex;
+}
+
+.cd-edit-btn:hover {
+  opacity: 1;
+}
+
+/* --- Phase 4: grid editor keyboard focus (§7.3 a11y) --- */
+
+/* Visible focus ring on a focused (non-editing) cell, distinct from the
+   editing state's accent fill so keyboard users can tell which cell is
+   focused vs. which is being typed in. */
+.cd-cell:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+/* Cells that hold the roving tabindex anchor (tabindex=0) get a subtle ring
+   even without :focus-visible, so the focused cell is discoverable after a
+   pointer-free interaction. */
+.cd-cell[tabindex="0"]:not(.is-focused) {
+  box-shadow: 0 0 0 1px var(--interactive-accent-hover);
 }
 

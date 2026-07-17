@@ -48,6 +48,8 @@ export interface GridEditorOptions {
   /** Default arrow style for newly drawn arrows. */
   defaultHead?: ArrowHead;
   defaultLineStyle?: LineStyle;
+  /** Whether to show the live draft-preview pane beneath the grid (§8.3). */
+  showPreview?: boolean;
 }
 
 const HEADS: ArrowHead[] = ["default", "epi", "hook", "mapsto", "none"];
@@ -63,6 +65,7 @@ export class GridEditor {
   private readonly anchor: { x: number; y: number };
   private readonly defaultHead: ArrowHead;
   private readonly defaultLineStyle: LineStyle;
+  private readonly showPreview: boolean;
   private readonly renderLabel: LabelRenderer;
   private readonly onCommit: (model: DiagramModel | null) => void;
   private readonly onDiscard: () => void;
@@ -71,10 +74,18 @@ export class GridEditor {
   private gridEl: HTMLDivElement;
   private previewEl: HTMLDivElement;
   private propertiesEl: HTMLDivElement | null = null;
+  /**
+   * User-set position for the arrow properties popover, when they've dragged
+   * it off the default corner. Cleared in closeProperties so a freshly opened
+   * panel starts at the default position again.
+   */
+  private propertiesOffset: { left: number; top: number } | null = null;
 
   private model: DiagramModel;
   private selectedArrowId: string | null = null;
   private editingCell: { row: number; col: number } | null = null;
+  /** The gridcell that currently holds roving-tabindex focus (§7.3 a11y). */
+  private focusedCell: { row: number; col: number } | null = null;
   private previewTimer: number | null = null;
   /** Render-generation guard: only the latest renderPreview call appends its
    *  SVG, so two overlapping async renders can't both draw (which produced a
@@ -95,11 +106,14 @@ export class GridEditor {
     this.anchor = opts.anchor;
     this.defaultHead = opts.defaultHead ?? "default";
     this.defaultLineStyle = opts.defaultLineStyle ?? "solid";
+    this.showPreview = opts.showPreview !== false;
 
     this.root = this.doc.createElement("div");
     this.root.className = "cd-editor-overlay";
     this.gridEl = this.doc.createElement("div");
     this.gridEl.className = "cd-editor-grid";
+    this.gridEl.setAttribute("role", "grid");
+    this.gridEl.setAttribute("aria-label", "Commutative diagram grid");
     this.previewEl = this.doc.createElement("div");
     this.previewEl.className = "cd-editor-preview";
 
@@ -111,15 +125,24 @@ export class GridEditor {
   mount(): void {
     this.buildChrome();
     this.root.appendChild(this.gridEl);
-    const previewWrap = this.doc.createElement("div");
-    previewWrap.className = "cd-editor-preview-wrap";
-    previewWrap.appendChild(this.previewEl);
-    this.root.appendChild(previewWrap);
+    if (this.showPreview) {
+      const previewWrap = this.doc.createElement("div");
+      previewWrap.className = "cd-editor-preview-wrap";
+      previewWrap.appendChild(this.previewEl);
+      this.root.appendChild(previewWrap);
+    }
     this.doc.body.appendChild(this.root);
 
     this.position();
     this.renderGrid();
-    this.renderPreview();
+    if (this.showPreview) this.renderPreview();
+
+    // §7.3 a11y: seed roving focus on the top-left cell so keyboard users land
+    // somewhere meaningful on open (don't steal focus from a cell input that
+    // the user might be actively typing in — we only seed when nothing is
+    // being edited, which is always the case at mount).
+    if (!this.focusedCell) this.focusedCell = { row: 0, col: 0 };
+    this.restoreCellFocus();
 
     // Capture-phase outside-pointer handler so we commit before a click on an
     // underlying element takes effect. We must ignore presses inside our root
@@ -249,6 +272,9 @@ export class GridEditor {
 
     // Draw the model's arrows directly on the grid (in-grid live feedback).
     this.renderGridArrows();
+
+    // §7.3 a11y: restore roving-tabindex focus after a full grid rebuild.
+    this.restoreCellFocus();
   }
 
   private buildCell(row: number, col: number): HTMLDivElement {
@@ -256,8 +282,19 @@ export class GridEditor {
     cell.className = "cd-cell";
     cell.dataset.row = String(row);
     cell.dataset.col = String(col);
+    // §7.3 accessibility: cells are keyboard-focusable grid cells. tabindex
+    // -1 (focusable programmatically / via arrow keys, not in the natural Tab
+    // order); the grid uses roving tabindex — exactly one cell holds tabindex
+    // 0 at a time (the "focused" cell), set in restoreCellFocus.
+    cell.setAttribute("role", "gridcell");
+    cell.setAttribute("tabindex", "-1");
     const label = getLabel(this.model, row, col);
-    if (label.trim() === "") cell.addClass("is-empty");
+    if (label.trim() === "") {
+      cell.addClass("is-empty");
+      cell.setAttribute("aria-label", `Empty cell row ${row + 1} column ${col + 1}`);
+    } else {
+      cell.setAttribute("aria-label", `Cell row ${row + 1} column ${col + 1}: ${label}`);
+    }
 
     // Label display (preview while not editing).
     const labelEl = this.doc.createElement("div");
@@ -282,6 +319,29 @@ export class GridEditor {
       e.preventDefault();
       e.stopPropagation();
       this.beginPress(row, col, e);
+    });
+
+    // Keyboard: when a cell is focused (not being edited — the input owns its
+    // own keys), Enter/Space open the label editor and arrow keys move focus
+    // to the neighbor cell (§7.3 accessibility pass).
+    cell.addEventListener("keydown", (e) => {
+      if (this.editingCell) return; // input handles keys while editing
+      switch (e.key) {
+        case "Enter":
+        case " ":
+          e.preventDefault();
+          e.stopPropagation();
+          this.startEditing(row, col);
+          break;
+        case "ArrowUp":
+        case "ArrowDown":
+        case "ArrowLeft":
+        case "ArrowRight":
+          e.preventDefault();
+          e.stopPropagation();
+          this.moveFocusArrow(row, col, e.key);
+          break;
+      }
     });
 
     return cell;
@@ -363,6 +423,7 @@ export class GridEditor {
   private startEditing(row: number, col: number): void {
     if (this.editingCell) this.commitCellEdit();
     this.editingCell = { row, col };
+    this.focusedCell = { row, col };
     this.selectedArrowId = null;
     this.closeProperties();
 
@@ -424,10 +485,13 @@ export class GridEditor {
     this.cancelPreviewDebounce();
 
     this.model = setCellLabel(this.model, row, col, value);
+    // Keep keyboard focus on the just-edited cell after the grid rebuilds.
+    this.focusedCell = { row, col };
     this.rerenderAll();
   }
 
   private cancelCellEdit(): void {
+    if (this.editingCell) this.focusedCell = { ...this.editingCell };
     this.editingCell = null;
     this.cancelPreviewDebounce();
     this.rerenderAll();
@@ -441,7 +505,68 @@ export class GridEditor {
     if (idx >= n) idx = 0;
     const nr = Math.floor(idx / this.model.cols);
     const nc = idx % this.model.cols;
+    this.focusedCell = { row: nr, col: nc };
     this.startEditing(nr, nc);
+  }
+
+  /**
+   * Move roving cell focus by one step in an arrow-key direction (§7.3 a11y).
+   * Wraps within the grid. Does NOT open the editor — arrow keys move focus,
+   * Enter/Space edit.
+   */
+  private moveFocusArrow(row: number, col: number, key: string): void {
+    let r = row;
+    let c = col;
+    if (key === "ArrowUp") r = (row - 1 + this.model.rows) % this.model.rows;
+    else if (key === "ArrowDown") r = (row + 1) % this.model.rows;
+    else if (key === "ArrowLeft") c = (col - 1 + this.model.cols) % this.model.cols;
+    else if (key === "ArrowRight") c = (col + 1) % this.model.cols;
+    this.focusedCell = { row: r, col: c };
+    this.focusCell(r, c);
+  }
+
+  /** Focus a cell and make it the roving-tabindex anchor. */
+  private focusCell(row: number, col: number): void {
+    const cell = this.gridEl.querySelector<HTMLDivElement>(
+      `.cd-cell[data-row="${row}"][data-col="${col}"]`,
+    );
+    if (cell) {
+      cell.setAttribute("tabindex", "0");
+      cell.focus();
+    }
+  }
+
+  /**
+   * After a grid rebuild, re-establish roving-tabindex on `focusedCell` (or
+   * the top-left cell). Only steals DOM focus when no cell input is currently
+   * being edited, so we never yank focus out from under a typing user.
+   */
+  private restoreCellFocus(): void {
+    const all = this.gridEl.querySelectorAll<HTMLElement>(".cd-cell");
+    for (const c of Array.from(all)) c.setAttribute("tabindex", "-1");
+
+    let target = this.focusedCell;
+    if (!target || target.row >= this.model.rows || target.col >= this.model.cols) {
+      target = { row: 0, col: 0 };
+      this.focusedCell = target;
+    }
+    const cell = this.gridEl.querySelector<HTMLDivElement>(
+      `.cd-cell[data-row="${target.row}"][data-col="${target.col}"]`,
+    );
+    if (!cell) return;
+    cell.setAttribute("tabindex", "0");
+    // Don't move DOM focus while the user is mid-edit in a cell input — the
+    // input owns focus then. Otherwise focus the cell so keyboard navigation
+    // works immediately after e.g. an add-row/col.
+    if (!this.editingCell) {
+      // Only refocus if the overlay itself (or a descendant) currently holds
+      // focus; otherwise we'd steal focus from somewhere external on a
+      // background re-render. We treat "active element is within root" as the
+      // signal that focus is ours to manage.
+      if (this.root.contains(this.doc.activeElement)) {
+        cell.focus();
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -778,6 +903,18 @@ export class GridEditor {
     pop.className = "cd-properties";
     this.propertiesEl = pop;
 
+    // Draggable header (§improvement): grab the panel by its title bar to move
+    // it anywhere over the overlay. The drag remembers an offset that survives
+    // the rerenderAll() that fires on every field change, so editing a field
+    // doesn't snap the panel back to its default corner.
+    const header = this.doc.createElement("div");
+    header.className = "cd-properties-header";
+    const headerTitle = this.doc.createElement("span");
+    headerTitle.textContent = "Arrow";
+    header.appendChild(headerTitle);
+    pop.appendChild(header);
+    this.makePropertiesDraggable(header, pop);
+
     const addField = (label: string, input: HTMLElement) => {
       const wrap = this.doc.createElement("label");
       const lab = this.doc.createElement("span");
@@ -873,9 +1010,17 @@ export class GridEditor {
 
   private positionProperties(): void {
     if (!this.propertiesEl) return;
-    // Place below the grid's top-right area; clamp into the overlay.
     const rootRect = this.root.getBoundingClientRect();
     const popRect = this.propertiesEl.getBoundingClientRect();
+    // If the user has dragged the panel, keep it where they put it (clamped to
+    // stay inside the overlay); otherwise default to the bottom-right corner.
+    if (this.propertiesOffset) {
+      const left = Math.max(0, Math.min(this.propertiesOffset.left, rootRect.width - popRect.width));
+      const top = Math.max(0, Math.min(this.propertiesOffset.top, rootRect.height - popRect.height));
+      this.propertiesEl.style.left = `${left}px`;
+      this.propertiesEl.style.top = `${top}px`;
+      return;
+    }
     const left = Math.max(8, rootRect.width - popRect.width - 12);
     const top = rootRect.height - popRect.height - 12;
     this.propertiesEl.style.left = `${left}px`;
@@ -885,12 +1030,64 @@ export class GridEditor {
   private closeProperties(): void {
     this.propertiesEl?.remove();
     this.propertiesEl = null;
+    this.propertiesOffset = null;
+  }
+
+  /**
+   * Make `handle` drag `panel` (both within the overlay root). On drag, record
+   * the panel's left/top so positionProperties() preserves it across rerenders.
+   * Clamped to keep the panel inside the overlay.
+   */
+  private makePropertiesDraggable(handle: HTMLElement, panel: HTMLElement): void {
+    handle.style.cursor = "grab";
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let originLeft = 0;
+    let originTop = 0;
+
+    handle.addEventListener("pointerdown", (e) => {
+      // Don't start a drag from interactive controls (none here, but guard).
+      if (e.target instanceof HTMLElement && e.target.closest("button,input,select,label")) return;
+      dragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      const rootRect = this.root.getBoundingClientRect();
+      originLeft = rect.left - rootRect.left;
+      originTop = rect.top - rootRect.top;
+      handle.style.cursor = "grabbing";
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    const onMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      const rootRect = this.root.getBoundingClientRect();
+      const popRect = panel.getBoundingClientRect();
+      let left = originLeft + (e.clientX - startX);
+      let top = originTop + (e.clientY - startY);
+      // Clamp so the panel stays (mostly) inside the overlay.
+      left = Math.max(0, Math.min(left, rootRect.width - popRect.width));
+      top = Math.max(0, Math.min(top, rootRect.height - popRect.height));
+      panel.style.left = `${left}px`;
+      panel.style.top = `${top}px`;
+      this.propertiesOffset = { left, top };
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.style.cursor = "grab";
+    };
+    // window-level so the drag continues even if the pointer leaves the handle.
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   private patchArrow(id: string, patch: Partial<DiagramArrow>): void {
     this.model = updateArrow(this.model, id, patch);
     this.renderGridArrows();
-    this.renderPreview();
+    if (this.showPreview) this.renderPreview();
   }
 
   // -------------------------------------------------------------------------
@@ -934,7 +1131,7 @@ export class GridEditor {
 
   private rerenderAll(): void {
     this.renderGrid();
-    this.renderPreview();
+    if (this.showPreview) this.renderPreview();
     // Re-open properties if an arrow is still selected and still exists.
     if (this.selectedArrowId && this.model.arrows.some((a) => a.id === this.selectedArrowId)) {
       this.openProperties(this.selectedArrowId);

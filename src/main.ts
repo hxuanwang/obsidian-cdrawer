@@ -22,6 +22,8 @@ import { renderDiagramAsync, type LabelRenderer } from "./diagram/render";
 import { resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
 import { GridEditor, freshModel } from "./editor/GridEditor";
 import { cdLivePreviewExtension } from "./view/live-preview";
+import { attachEditAffordance } from "./view/edit-affordance";
+import { CDSettingTab, DEFAULT_SETTINGS, type CDSettings } from "./settings";
 
 const CD_LANGUAGE = "cd";
 const FENCE = "```";
@@ -30,7 +32,11 @@ const FENCE = "```";
 let activeEditor: GridEditor | null = null;
 
 export default class CommutativeDiagramPlugin extends Plugin {
-  onload(): void {
+  settings: CDSettings = DEFAULT_SETTINGS;
+
+  async onload(): Promise<void> {
+    await this.loadSettings();
+
     // --- Phase 1 + Phase 3: display processor (§8.1) with click-to-reedit ---
     this.registerMarkdownCodeBlockProcessor(
       CD_LANGUAGE,
@@ -51,8 +57,12 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // replacing the block's text range, so undo/redo/sync stay correct.
     this.registerEditorExtension(cdLivePreviewExtension({
       renderLabel: makeLabelRenderer(activeWindow().document),
+      getClickToEdit: () => this.settings.clickToEdit,
       onEdit: (view, block, model) => this.onEditLivePreview(view, block, model),
     }));
+
+    // --- Phase 4: settings tab (§8.3) ---
+    this.addSettingTab(new CDSettingTab(this.app, this));
 
     // --- Phase 2: triggers (§7.1) ---
     this.addRibbonIcon("grid", "Insert commutative diagram", () => {
@@ -100,9 +110,12 @@ export default class CommutativeDiagramPlugin extends Plugin {
 
     activeEditor = new GridEditor({
       document: activeDocument(this.app),
-      model: freshModel(3, 3),
+      model: freshModel(this.settings.defaultRows, this.settings.defaultCols),
       anchor,
       renderLabel: makeLabelRenderer(activeDocument(this.app)),
+      defaultHead: this.settings.defaultHead,
+      defaultLineStyle: this.settings.defaultLineStyle,
+      showPreview: this.settings.showPreview,
       onCommit: (model: DiagramModel | null) => {
         activeEditor = null;
         if (!model) return; // empty draft → write nothing (§7.4)
@@ -184,11 +197,11 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // Click-to-reedit (Phase 3, §8): clicking the rendered diagram reopens the
     // grid editor pre-filled with this block's model — no underlying JSON
     // editing, no extra button. On commit we rewrite the block's source range.
+    // Phase 4 (§8.3): the click-vs-hover-to-edit affordance is shared with Live
+    // Preview via attachEditAffordance, driven by the clickToEdit setting.
     const section = ctx.getSectionInfo?.(el) ?? null;
     if (svg) {
-      svg.style.cursor = "pointer";
-      svg.addEventListener("click", (e) => {
-        e.stopPropagation();
+      attachEditAffordance(el, svg, this.settings.clickToEdit, () => {
         this.openEditorForExisting(model, ctx.sourcePath, section, svg);
       });
     }
@@ -217,6 +230,9 @@ export default class CommutativeDiagramPlugin extends Plugin {
       model,
       anchor,
       renderLabel: makeLabelRenderer(doc),
+      defaultHead: this.settings.defaultHead,
+      defaultLineStyle: this.settings.defaultLineStyle,
+      showPreview: this.settings.showPreview,
       onCommit: async (committed: DiagramModel | null) => {
         activeEditor = null;
         await this.writeBlock(sourcePath, section, committed);
@@ -259,6 +275,9 @@ export default class CommutativeDiagramPlugin extends Plugin {
       model,
       anchor,
       renderLabel: makeLabelRenderer(doc),
+      defaultHead: this.settings.defaultHead,
+      defaultLineStyle: this.settings.defaultLineStyle,
+      showPreview: this.settings.showPreview,
       onCommit: (committed: DiagramModel | null) => {
         activeEditor = null;
         this.commitLivePreview(view, from, to, committed);
@@ -322,6 +341,18 @@ export default class CommutativeDiagramPlugin extends Plugin {
       const replaced = newBlock === null ? [] : newBlock.split("\n");
       return [...before, ...replaced, ...after].join("\n");
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 4: settings (§8.3)
+  // -------------------------------------------------------------------------
+
+  async loadSettings(): Promise<void> {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
   }
 }
 
