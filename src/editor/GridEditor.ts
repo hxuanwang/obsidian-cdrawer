@@ -588,15 +588,16 @@ export class GridEditor {
     const ox = cdy * offset;
     const oy = -cdx * offset;
 
-    // Clip shaft to cell box edges (cells are ~92x48; use a small inset).
-    const cellEl = this.gridEl.querySelector<HTMLElement>(
-      `.cd-cell[data-row="${arrow.from.row}"][data-col="${arrow.from.col}"]`,
-    );
-    const half = cellEl ? cellEl.getBoundingClientRect() : { width: 40, height: 24 };
-    const hw = half.width / 2 - 6;
-    const hh = half.height / 2 - 4;
-    const start = clipToBox(c1.x, c1.y, dx, dy, hw, hh);
-    const end = clipToBox(c2.x, c2.y, -dx, -dy, hw, hh);
+    // Clip the shaft to each ENDPOINT's *rendered label* box (plus a little
+    // padding), not the whole cell. An arrow's length/direction thus follows
+    // the actual distance between the two objects: a short label in a wide
+    // cell yields a long arrow spanning the real gap, instead of a stub that
+    // only crosses the cell boundary. Empty cells anchor near their center.
+    const pad = 5;
+    const s1 = this.labelHalfExtents(arrow.from.row, arrow.from.col, pad);
+    const s2 = this.labelHalfExtents(arrow.to.row, arrow.to.col, pad);
+    const start = clipToBox(c1.x, c1.y, dx, dy, s1.hw, s1.hh);
+    const end = clipToBox(c2.x, c2.y, -dx, -dy, s2.hw, s2.hh);
     const x1 = start.x + ox;
     const y1 = start.y + oy;
     const x2 = end.x + ox;
@@ -716,6 +717,25 @@ export class GridEditor {
     const g = this.gridEl.getBoundingClientRect();
     const c = cell?.getBoundingClientRect() ?? g;
     return { x: c.left - g.left + c.width / 2, y: c.top - g.top + c.height / 2 };
+  }
+
+  /**
+   * Half-extents (plus padding) of a cell's *rendered label* for arrow-edge
+   * clipping. Falls back to a tiny box for empty cells so an arrow anchors near
+   * the cell center rather than the (much larger) cell boundary.
+   */
+  private labelHalfExtents(row: number, col: number, pad: number): { hw: number; hh: number } {
+    const cell = this.gridEl.querySelector<HTMLElement>(
+      `.cd-cell[data-row="${row}"][data-col="${col}"]`,
+    );
+    const label = cell?.querySelector<HTMLElement>(".cd-cell-label");
+    if (label) {
+      const r = label.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        return { hw: r.width / 2 + pad, hh: r.height / 2 + pad };
+      }
+    }
+    return { hw: pad, hh: pad };
   }
 
   private cellAtPoint(x: number, y: number): { row: number; col: number } | null {
