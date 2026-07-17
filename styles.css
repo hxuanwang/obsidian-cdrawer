@@ -322,6 +322,84 @@
   border-color: var(--background-modifier-error);
 }
 
+/* Import / Export chrome buttons (§9). Same weight as Discard so the three
+   read as one action row. */
+.cd-editor-chrome-btn {
+  font-size: var(--font-ui-smaller);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+}
+
+.cd-editor-chrome-btn:hover {
+  color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* Popover anchored under the Import / Export buttons. */
+.cd-chrome-popover {
+  position: absolute;
+  z-index: 1002;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  width: min(420px, 70vw);
+}
+
+.cd-popover-title {
+  font-weight: 600;
+}
+
+.cd-chrome-popover select {
+  align-self: flex-start;
+}
+
+.cd-popover-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 6px;
+}
+
+.cd-popover-textarea:disabled {
+  opacity: 0.5;
+}
+
+.cd-popover-status {
+  color: var(--text-muted);
+  min-height: 1.2em;
+}
+
+.cd-popover-action {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  cursor: pointer;
+}
+
+.cd-popover-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Live draft preview, rendered with the same renderer as display mode (§7). */
 .cd-editor-preview-wrap {
   border-top: 1px solid var(--background-modifier-border);

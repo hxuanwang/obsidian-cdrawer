@@ -30,6 +30,10 @@ import {
   type ArrowHead, type DiagramArrow, type DiagramModel, type LabelPosition, type LineStyle,
 } from "../diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "../diagram/render";
+import { toTikzcd } from "../interop/to-tikzcd";
+import { fromTikzcd } from "../interop/from-tikzcd";
+import { toCD, canExportToCD } from "../interop/to-cd";
+import { fromCD } from "../interop/from-cd";
 
 export interface GridEditorOptions {
   /** Document to mount into (the active leaf's document). */
@@ -80,6 +84,9 @@ export class GridEditor {
    * panel starts at the default position again.
    */
   private propertiesOffset: { left: number; top: number } | null = null;
+  /** A chrome popover (Import/Export), anchored to its trigger button. Only one
+   *  is open at a time; toggling its trigger closes the other. */
+  private chromePopover: HTMLDivElement | null = null;
 
   private model: DiagramModel;
   private selectedArrowId: string | null = null;
@@ -156,6 +163,7 @@ export class GridEditor {
     if (this.closed) return;
     this.closed = true;
     this.cancelPreviewDebounce();
+    this.closeChromePopover();
     this.doc.removeEventListener("pointerdown", this.boundOutsidePointer, true);
     this.doc.removeEventListener("keydown", this.boundKeyDown, true);
     this.root.remove();
@@ -179,6 +187,29 @@ export class GridEditor {
 
     const actions = this.doc.createElement("div");
     actions.className = "cd-editor-actions";
+
+    // Import (§9): paste a tikz-cd or AMS CD block to replace the draft.
+    const importBtn = this.doc.createElement("button");
+    importBtn.type = "button";
+    importBtn.textContent = "Import";
+    importBtn.className = "cd-editor-chrome-btn cd-editor-import";
+    importBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleImportPopover(importBtn);
+    });
+    actions.appendChild(importBtn);
+
+    // Export (§9): emit the draft as tikz-cd or AMS CD.
+    const exportBtn = this.doc.createElement("button");
+    exportBtn.type = "button";
+    exportBtn.textContent = "Export";
+    exportBtn.className = "cd-editor-chrome-btn cd-editor-export";
+    exportBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleExportPopover(exportBtn);
+    });
+    actions.appendChild(exportBtn);
+
     const discard = this.doc.createElement("button");
     discard.type = "button";
     discard.textContent = "Discard";
@@ -236,6 +267,185 @@ export class GridEditor {
     const { left, top } = placeNear(this.anchor.x, this.anchor.y, rect.width, rect.height);
     this.root.style.left = `${left}px`;
     this.root.style.top = `${top}px`;
+  }
+
+  // -------------------------------------------------------------------------
+  // Import / Export popovers (§9)
+  //
+  // Two small popovers anchored under the Import / Export chrome buttons.
+  // Import: a textarea + a format toggle (tikz-cd / AMS CD) + an "Import"
+  // button that parses the pasted source and replaces the draft. Export: a
+  // format toggle (tikz-cd / AMS CD) that shows the emitted source in a
+  // read-only textarea with a Copy button. AMS-CD export is gated by §9's
+  // canExportToCD — when the draft isn't CD-expressible the option is disabled
+  // with an explanatory note.
+  // -------------------------------------------------------------------------
+
+  /** Close any open chrome popover. */
+  private closeChromePopover(): void {
+    this.chromePopover?.remove();
+    this.chromePopover = null;
+  }
+
+  /** Open a chrome popover anchored below `trigger`, closing any other first. */
+  private openChromePopover(trigger: HTMLElement, build: (pop: HTMLDivElement) => void): void {
+    this.closeChromePopover();
+    const pop = this.doc.createElement("div");
+    pop.className = "cd-chrome-popover";
+    build(pop);
+    this.root.appendChild(pop);
+    this.chromePopover = pop;
+    this.positionChromePopover(trigger, pop);
+  }
+
+  /** Place a chrome popover just below its trigger button, clamped to root. */
+  private positionChromePopover(trigger: HTMLElement, pop: HTMLDivElement): void {
+    const rootRect = this.root.getBoundingClientRect();
+    const t = trigger.getBoundingClientRect();
+    const left = Math.max(8, Math.min(t.left - rootRect.left, rootRect.width - pop.offsetWidth - 8));
+    const top = t.bottom - rootRect.top + 4;
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+  }
+
+  /** Toggle the Import popover open/closed. */
+  private toggleImportPopover(trigger: HTMLElement): void {
+    if (this.chromePopover?.classList.contains("cd-import-popover")) {
+      this.closeChromePopover();
+      return;
+    }
+    this.openChromePopover(trigger, (pop) => {
+      pop.addClass("cd-import-popover");
+      const title = this.doc.createElement("div");
+      title.className = "cd-popover-title";
+      title.textContent = "Import";
+      pop.appendChild(title);
+
+      const format = this.doc.createElement("select");
+      for (const f of ["tikz-cd", "AMS CD"]) {
+        const o = this.doc.createElement("option");
+        o.value = f;
+        o.textContent = f;
+        format.appendChild(o);
+      }
+      pop.appendChild(format);
+
+      const ta = this.doc.createElement("textarea");
+      ta.className = "cd-popover-textarea";
+      ta.spellcheck = false;
+      ta.placeholder = "Paste a tikz-cd or \\begin{CD}…\\end{CD} block here";
+      pop.appendChild(ta);
+
+      const status = this.doc.createElement("div");
+      status.className = "cd-popover-status";
+      pop.appendChild(status);
+
+      const importBtn = this.doc.createElement("button");
+      importBtn.type = "button";
+      importBtn.textContent = "Import into editor";
+      importBtn.className = "cd-popover-action";
+      importBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const src = ta.value;
+        if (src.trim() === "") {
+          status.textContent = "Paste a block first.";
+          return;
+        }
+        try {
+          const model = format.value === "tikz-cd" ? fromTikzcd(src) : fromCD(src);
+          if (model.cells.length === 0 && model.arrows.length === 0) {
+            status.textContent = "Nothing recognizable — check the format.";
+            return;
+          }
+          this.model = model;
+          this.selectedArrowId = null;
+          this.closeProperties();
+          this.closeChromePopover();
+          this.rerenderAll();
+        } catch (err) {
+          status.textContent = `Could not parse: ${(err as Error).message}`;
+        }
+      });
+      pop.appendChild(importBtn);
+
+      // Auto-focus the textarea when the popover opens.
+      requestAnimationFrame(() => ta.focus());
+    });
+  }
+
+  /** Toggle the Export popover open/closed. */
+  private toggleExportPopover(trigger: HTMLElement): void {
+    if (this.chromePopover?.classList.contains("cd-export-popover")) {
+      this.closeChromePopover();
+      return;
+    }
+    this.openChromePopover(trigger, (pop) => {
+      pop.addClass("cd-export-popover");
+      const title = this.doc.createElement("div");
+      title.className = "cd-popover-title";
+      title.textContent = "Export";
+      pop.appendChild(title);
+
+      const format = this.doc.createElement("select");
+      const tikzOpt = this.doc.createElement("option");
+      tikzOpt.value = "tikz-cd";
+      tikzOpt.textContent = "tikz-cd";
+      const cdOpt = this.doc.createElement("option");
+      cdOpt.value = "AMS CD";
+      cdOpt.textContent = "AMS CD";
+      format.appendChild(tikzOpt);
+      format.appendChild(cdOpt);
+      pop.appendChild(format);
+
+      const ta = this.doc.createElement("textarea");
+      ta.className = "cd-popover-textarea";
+      ta.spellcheck = false;
+      ta.readOnly = true;
+      pop.appendChild(ta);
+
+      const status = this.doc.createElement("div");
+      status.className = "cd-popover-status";
+      pop.appendChild(status);
+
+      const copyBtn = this.doc.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.textContent = "Copy";
+      copyBtn.className = "cd-popover-action";
+      copyBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await this.doc.defaultView?.navigator.clipboard.writeText(ta.value);
+          status.textContent = "Copied to clipboard.";
+        } catch {
+          status.textContent = "Copy failed — select the text and copy manually.";
+        }
+      });
+      pop.appendChild(copyBtn);
+
+      const render = () => {
+        status.textContent = "";
+        if (format.value === "tikz-cd") {
+          ta.value = toTikzcd(this.model);
+          ta.disabled = false;
+          copyBtn.disabled = false;
+        } else {
+          const reason = canExportToCD(this.model);
+          if (reason) {
+            // §9 gating: not CD-expressible — show why, disable copy.
+            ta.value = "";
+            ta.disabled = true;
+            copyBtn.disabled = true;
+            status.textContent = reason;
+          } else {
+            ta.value = toCD(this.model);
+            ta.disabled = false;
+            copyBtn.disabled = false;
+          }
+        }
+      };
+      format.addEventListener("change", render);
+      render();
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1154,7 +1364,17 @@ export class GridEditor {
 
   private onOutsidePointer(e: PointerEvent): void {
     if (this.closed) return;
-    if (this.root.contains(e.target as Node)) return;
+    if (this.root.contains(e.target as Node)) {
+      // Inside the overlay: if a chrome popover is open and the press isn't on
+      // it (or its trigger button), close the popover so it doesn't dangle over
+      // the grid while the user edits. Don't commit — inside-root presses never
+      // do (§7.4).
+      if (this.chromePopover && !this.chromePopover.contains(e.target as Node)) {
+        const onTrigger = (e.target as HTMLElement).closest?.(".cd-editor-import, .cd-editor-export");
+        if (!onTrigger) this.closeChromePopover();
+      }
+      return;
+    }
     // A pointerdown outside the overlay commits (§7.4).
     this.commit();
   }
@@ -1162,6 +1382,12 @@ export class GridEditor {
   private onKeyDown(e: KeyboardEvent): void {
     if (this.closed) return;
     if (e.key === "Escape") {
+      // If a chrome popover (Import/Export) is open, Escape closes just that.
+      if (this.chromePopover) {
+        e.stopPropagation();
+        this.closeChromePopover();
+        return;
+      }
       // If a cell is being edited or the properties popover is open, Escape
       // closes just that; otherwise Escape commits the whole editor (§7.4).
       if (this.editingCell) {

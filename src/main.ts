@@ -13,7 +13,7 @@
  * (editor.replaceRange). Click-to-reedit an existing diagram is Phase 3.
  */
 
-import { MarkdownView, Plugin, renderMath, TFile, type App, type Editor, type MarkdownFileInfo } from "obsidian";
+import { MarkdownView, Notice, Plugin, renderMath, TFile, type App, type Editor, type EditorPosition, type MarkdownFileInfo } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 
@@ -24,6 +24,10 @@ import { GridEditor, freshModel } from "./editor/GridEditor";
 import { cdLivePreviewExtension } from "./view/live-preview";
 import { attachEditAffordance } from "./view/edit-affordance";
 import { CDSettingTab, DEFAULT_SETTINGS, type CDSettings } from "./settings";
+import { toTikzcd } from "./interop/to-tikzcd";
+import { fromTikzcd } from "./interop/from-tikzcd";
+import { toCD, canExportToCD } from "./interop/to-cd";
+import { fromCD } from "./interop/from-cd";
 
 const CD_LANGUAGE = "cd";
 const FENCE = "```";
@@ -86,6 +90,40 @@ export default class CommutativeDiagramPlugin extends Plugin {
         });
       }),
     );
+
+    // --- Phase 5: interop commands (§9) ---
+    // Convert an existing native \begin{CD} block under the cursor into an
+    // editable `cd` block — the upgrade path that fulfils "renders similar to
+    // \begin{CD}\end{CD}" as more than a stylistic target (§9).
+    this.addCommand({
+      id: "convert-cd-block-to-editable-diagram",
+      name: "Convert CD block to editable diagram",
+      editorCallback: (editor) => this.convertCDBlock(editor),
+    });
+
+    // Export the `cd` block under the cursor to tikz-cd, ready to paste into a
+    // real LaTeX document.
+    this.addCommand({
+      id: "export-diagram-as-tikzcd",
+      name: "Export diagram as tikz-cd",
+      editorCallback: (editor) => this.exportAsTikzcd(editor),
+    });
+
+    // Export the `cd` block under the cursor to plain AMS CD, when the model is
+    // CD-expressible (§9 gating).
+    this.addCommand({
+      id: "export-diagram-as-cd",
+      name: "Export diagram as AMS CD",
+      editorCallback: (editor) => this.exportAsCD(editor),
+    });
+
+    // Import a tikz-cd block under the cursor, converting it to an editable
+    // `cd` block (parse the tikz-cd subset, §9).
+    this.addCommand({
+      id: "import-tikzcd-block",
+      name: "Import tikz-cd block as editable diagram",
+      editorCallback: (editor) => this.importTikzcd(editor),
+    });
   }
 
   /** Open the editor for whichever markdown editor is currently focused. */
@@ -149,6 +187,105 @@ export default class CommutativeDiagramPlugin extends Plugin {
     }
     // Fallback: near the top-left of the viewport, a little inset.
     return { x: 120, y: 160 };
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 5: interop commands (§9)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Convert a native `\begin{CD}…\end{CD}` block under the cursor into an
+   * editable `cd` fenced block. Recognizes the block whether it's wrapped in
+   * `$$…$$`, `\[…\]`, or bare. On success the original block is replaced; on
+   * failure a Notice explains why (no block found, or unparseable).
+   */
+  private convertCDBlock(editor: Editor): void {
+    const block = findCDEnvBlock(editor);
+    if (!block) {
+      new Notice("No \\begin{CD}…\\end{CD} block found at the cursor.");
+      return;
+    }
+    let model: DiagramModel;
+    try {
+      model = fromCD(block.source);
+    } catch (err) {
+      new Notice(`Could not parse CD block: ${(err as Error).message}`);
+      return;
+    }
+    if (model.cells.length === 0 && model.arrows.length === 0) {
+      new Notice("CD block is empty — nothing to convert.");
+      return;
+    }
+    const fenced = `${FENCE}${CD_LANGUAGE}\n${serializeDiagram(model)}\n${FENCE}\n`;
+    editor.replaceRange(fenced, block.from, block.to);
+  }
+
+  /** Export the `cd` block under the cursor to tikz-cd, inserted below it. */
+  private exportAsTikzcd(editor: Editor): void {
+    const block = findFencedBlock(editor, CD_LANGUAGE);
+    if (!block) {
+      new Notice("No ```cd block found at the cursor.");
+      return;
+    }
+    let model: DiagramModel;
+    try {
+      model = parseDiagram(block.source);
+    } catch (err) {
+      new Notice(`Could not parse cd block: ${(err as Error).message}`);
+      return;
+    }
+    const tex = toTikzcd(model);
+    insertBelow(editor, block.to, `${FENCE}tikzcd\n${tex}\n${FENCE}\n`);
+    new Notice("tikz-cd exported below the diagram.");
+  }
+
+  /** Export the `cd` block under the cursor to plain AMS CD, with §9 gating. */
+  private exportAsCD(editor: Editor): void {
+    const block = findFencedBlock(editor, CD_LANGUAGE);
+    if (!block) {
+      new Notice("No ```cd block found at the cursor.");
+      return;
+    }
+    let model: DiagramModel;
+    try {
+      model = parseDiagram(block.source);
+    } catch (err) {
+      new Notice(`Could not parse cd block: ${(err as Error).message}`);
+      return;
+    }
+    const reason = canExportToCD(model);
+    if (reason) {
+      // §9: when the model isn't CD-expressible, explain why rather than
+      // emitting lossy output.
+      new Notice(reason);
+      return;
+    }
+    const cd = toCD(model);
+    insertBelow(editor, block.to, `$$\n${cd}\n$$\n`);
+    new Notice("AMS CD exported below the diagram.");
+  }
+
+  /** Import a tikz-cd block under the cursor as an editable `cd` block. */
+  private importTikzcd(editor: Editor): void {
+    const block = findFencedBlock(editor, "tikzcd");
+    if (!block) {
+      new Notice("No ```tikzcd block found at the cursor.");
+      return;
+    }
+    let model: DiagramModel;
+    try {
+      model = fromTikzcd(block.source);
+    } catch (err) {
+      new Notice(`Could not parse tikz-cd block: ${(err as Error).message}`);
+      return;
+    }
+    if (model.cells.length === 0 && model.arrows.length === 0) {
+      new Notice("tikz-cd block parsed to an empty diagram.");
+      return;
+    }
+    const fenced = `${FENCE}${CD_LANGUAGE}\n${serializeDiagram(model)}\n${FENCE}\n`;
+    editor.replaceRange(fenced, block.from, block.to);
+    new Notice("tikz-cd block imported as an editable diagram.");
   }
 
   // -------------------------------------------------------------------------
@@ -413,4 +550,174 @@ function makeLabelRenderer(doc: Document): LabelRenderer {
     }
     return host;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: interop block-finding helpers
+// ---------------------------------------------------------------------------
+
+interface BlockRange {
+  /** Source text between the fences / env markers. */
+  source: string;
+  /** Editor positions bracketing the whole block (fences/markers included). */
+  from: EditorPosition;
+  to: EditorPosition;
+}
+
+/**
+ * Find a fenced code block (```lang … ```) whose line range contains the
+ * cursor. Returns the inner source and the editor range covering the whole
+ * block (open fence through close fence, inclusive). Case-insensitive info
+ * string, matching a prefix so both `tikzcd` and `tikz-cd` work for import.
+ */
+function findFencedBlock(editor: Editor, lang: string): BlockRange | null {
+  const cursorLine = editor.getCursor().line;
+  const count = editor.lineCount();
+  let i = 0;
+  while (i < count) {
+    const opener = fenceInfo(editor.getLine(i));
+    if (opener && opener.toLowerCase() === lang) {
+      // Find the closer.
+      let end = -1;
+      for (let j = i + 1; j < count; j++) {
+        if (/^\s*```\s*$/.test(editor.getLine(j))) {
+          end = j;
+          break;
+        }
+      }
+      if (end === -1) end = count - 1; // unterminated → EOF
+      const source = rangeLines(editor, i + 1, end - 1);
+      if (cursorLine >= i && cursorLine <= end) {
+        return {
+          source,
+          from: { line: i, ch: 0 },
+          to: { line: end, ch: editor.getLine(end).length },
+        };
+      }
+      i = end + 1;
+    } else {
+      i += 1;
+    }
+  }
+  return null;
+}
+
+/** If `text` is a fence opener, return its (trimmed) info string; else null. */
+function fenceInfo(text: string): string | null {
+  const m = /^( {0,3})```(.*)$/.exec(text);
+  if (!m) return null;
+  return m[2].trim();
+}
+
+/**
+ * Find a native AMS `\begin{CD}…\end{CD}` block whose line range contains the
+ * cursor, tolerating `$$…$$`, `\[…\]`, or bare wrappers. `source` is the
+ * `…\begin{CD}…\end{CD}…` text with the outer math delimiters stripped, ready
+ * to feed `fromCD` (which itself strips the env).
+ */
+function findCDEnvBlock(editor: Editor): BlockRange | null {
+  const cursorLine = editor.getCursor().line;
+  const count = editor.lineCount();
+  // Scan for `\begin{CD}` anywhere in the document; the block extends to the
+  // matching `\end{CD}`, possibly over several lines, possibly wrapped in
+  // `$$` / `\[` on surrounding lines.
+  for (let i = 0; i < count; i++) {
+    const line = editor.getLine(i);
+    const beginIdx = line.indexOf("\\begin{CD}");
+    if (beginIdx === -1) continue;
+    // Collect the source from `\begin{CD}` onward until `\end{CD}`.
+    let acc = "";
+    let endLine = i;
+    let endCol = -1;
+    for (let j = i; j < count; j++) {
+      const l = j === i ? line.slice(beginIdx) : editor.getLine(j);
+      const endIdx = l.indexOf("\\end{CD}");
+      if (endIdx !== -1) {
+        acc += l.slice(0, endIdx + "\\end{CD}".length);
+        endLine = j;
+        endCol = j === i ? beginIdx + endIdx + "\\end{CD}".length : endIdx + "\\end{CD}".length;
+        break;
+      }
+      acc += l + "\n";
+      endLine = j;
+    }
+    if (endCol === -1) continue; // unterminated; skip
+    // Block range: include wrapping `$$` / `\[` \)` / `\]` lines so conversion
+    // removes the whole math block, not just the env.
+    const { fromLine, fromCh, toLine, toCh } = expandMathWrapper(
+      editor, i, beginIdx, endLine, endCol,
+    );
+    if (cursorLine >= fromLine && cursorLine <= toLine) {
+      return {
+        source: acc,
+        from: { line: fromLine, ch: fromCh },
+        to: { line: toLine, ch: toCh },
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Extend a `\begin{CD}…\end{CD}` range to cover an enclosing `$$`/`\[` math
+ * wrapper, so converting the block removes the whole math region. Returns the
+ * tightest range that still includes the env.
+ */
+function expandMathWrapper(
+  editor: Editor,
+  beginLine: number,
+  beginCh: number,
+  endLine: number,
+  endCh: number,
+): { fromLine: number; fromCh: number; toLine: number; toCh: number } {
+  let fromLine = beginLine;
+  let fromCh = beginCh;
+  let toLine = endLine;
+  let toCh = endCh;
+  const before = editor.getLine(beginLine).slice(0, beginCh);
+  if (/\$\$\s*$/.test(before) || /\\\[\s*$/.test(before)) {
+    // The `$$`/`\[` sit on the same line before `\begin{CD}`; trim them.
+    const m = /(\$\$|\\\[)\s*$/.exec(before);
+    if (m) fromCh = beginCh - m[0].length;
+  } else {
+    // Look for a preceding line that is just `$$` or `\[`.
+    if (beginLine > 0) {
+      const prev = editor.getLine(beginLine - 1);
+      if (/^\s*\$\$\s*$/.test(prev) || /^\s*\\\[\s*$/.test(prev)) {
+        fromLine = beginLine - 1;
+        fromCh = 0;
+      }
+    }
+  }
+  const afterLine = editor.getLine(endLine).slice(endCh);
+  if (/^\s*\$\$/.test(afterLine) || /^\s*\\\]/.test(afterLine)) {
+    const m = /^\s*(\$\$|\\\])/.exec(afterLine);
+    if (m) toCh = endCh + m[0].length;
+  } else if (endLine + 1 < editor.lineCount()) {
+    const next = editor.getLine(endLine + 1);
+    if (/^\s*\$\$\s*$/.test(next) || /^\s*\\\]\s*$/.test(next)) {
+      toLine = endLine + 1;
+      toCh = next.length;
+    }
+  }
+  return { fromLine, fromCh, toLine, toCh };
+}
+
+/** Concatenate lines [start..end] inclusive, joined by newlines. */
+function rangeLines(editor: Editor, start: number, end: number): string {
+  const lines: string[] = [];
+  for (let i = start; i <= end; i++) lines.push(editor.getLine(i));
+  return lines.join("\n");
+}
+
+/**
+ * Insert `text` on a new line immediately after `pos`. Ensures the insertion
+ * starts on its own line so the exported block doesn't run into existing
+ * content, and leaves the cursor just past it.
+ */
+function insertBelow(editor: Editor, pos: EditorPosition, text: string): void {
+  const lineLen = editor.getLine(pos.line).length;
+  const at = { line: pos.line, ch: lineLen };
+  const prefix = "\n";
+  editor.replaceRange(prefix + text, at);
 }
