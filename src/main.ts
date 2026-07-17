@@ -13,7 +13,7 @@
  * (editor.replaceRange). Click-to-reedit an existing diagram is Phase 3.
  */
 
-import { MarkdownView, Notice, Plugin, renderMath, TFile, type App, type Editor, type EditorPosition, type MarkdownFileInfo } from "obsidian";
+import { MarkdownView, Notice, Platform, Plugin, renderMath, TFile, type App, type Editor, type EditorPosition, type MarkdownFileInfo } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 
@@ -138,6 +138,17 @@ export default class CommutativeDiagramPlugin extends Plugin {
    * serialized `cd` block at the cursor (§7.4); on discard, do nothing.
    */
   private openEditor(editor: Editor): void {
+    // §13 / Phase 6: the grid editor is desktop-only for v1 (touch dragging and
+    // the keyboard/roving-tabindex model aren't tuned for mobile). Display mode
+    // still works everywhere — only *authoring* is gated. `isDesktopOnly` stays
+    // false in the manifest so diagrams render on mobile; we soft-block opening
+    // the editor there with a notice rather than disabling the commands (the
+    // commands are harmless to register, and the notice explains the limitation).
+    if (Platform.isMobileApp) {
+      new Notice("Editing commutative diagrams is desktop-only for now. Diagrams still render here.");
+      return;
+    }
+
     if (activeEditor) {
       activeEditor.close();
       activeEditor = null;
@@ -355,6 +366,10 @@ export default class CommutativeDiagramPlugin extends Plugin {
     section: { lineStart: number; lineEnd: number } | null,
     svg: SVGElement | null,
   ): void {
+    if (Platform.isMobileApp) {
+      new Notice("Editing commutative diagrams is desktop-only for now.");
+      return;
+    }
     if (activeEditor) {
       activeEditor.close();
       activeEditor = null;
@@ -396,6 +411,10 @@ export default class CommutativeDiagramPlugin extends Plugin {
     block: { start: number; end: number },
     model: DiagramModel,
   ): void {
+    if (Platform.isMobileApp) {
+      new Notice("Editing commutative diagrams is desktop-only for now.");
+      return;
+    }
     if (activeEditor) {
       activeEditor.close();
       activeEditor = null;

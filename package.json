@@ -1,6 +1,6 @@
 {
   "name": "obsidian-cdrawer",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Obsidian plugin: insert and edit commutative diagrams on a fixed grid.",
   "main": "main.js",
   "type": "module",
