@@ -14,12 +14,14 @@
  */
 
 import { MarkdownView, Plugin, renderMath, TFile, type App, type Editor, type MarkdownFileInfo } from "obsidian";
-import type { EditorView } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
+import { EditorSelection } from "@codemirror/state";
 
 import { parseDiagram, serializeDiagram, type DiagramModel } from "./diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "./diagram/render";
 import { resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
 import { GridEditor, freshModel } from "./editor/GridEditor";
+import { cdLivePreviewExtension } from "./view/live-preview";
 
 const CD_LANGUAGE = "cd";
 const FENCE = "```";
@@ -40,6 +42,16 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // Drop cached style metrics on theme change (§6.4).
     this.registerEvent(this.app.workspace.on("css-change", () => {
       resetCDStyleMetricsCache();
+    }));
+
+    // --- Phase 3: Live Preview display (§8.2) ---
+    // A CM6 ViewPlugin that replaces each ```cd fenced block with a static
+    // SVG widget (render-only). Clicking the widget opens the same floating
+    // grid editor as Reading view; on commit we dispatch a CM6 transaction
+    // replacing the block's text range, so undo/redo/sync stay correct.
+    this.registerEditorExtension(cdLivePreviewExtension({
+      renderLabel: makeLabelRenderer(activeWindow().document),
+      onEdit: (view, block, model) => this.onEditLivePreview(view, block, model),
     }));
 
     // --- Phase 2: triggers (§7.1) ---
@@ -216,6 +228,78 @@ export default class CommutativeDiagramPlugin extends Plugin {
     activeEditor.mount();
   }
 
+  // -------------------------------------------------------------------------
+  // Phase 3: Live Preview click-to-reedit (§8.2)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Open the grid editor for a ```cd block shown as a Live Preview widget.
+   * Prefilled with `model`, anchored over the block. On commit, dispatch a CM6
+   * transaction replacing the block's text range (so undo/redo/sync work); an
+   * emptied draft removes the block entirely.
+   */
+  private onEditLivePreview(
+    view: EditorView,
+    block: { start: number; end: number },
+    model: DiagramModel,
+  ): void {
+    if (activeEditor) {
+      activeEditor.close();
+      activeEditor = null;
+    }
+    // Anchor over the block's on-screen box. The widget decoration spans the
+    // block's lines; measure the DOM range it occupies.
+    const from = view.state.doc.line(block.start + 1).from;
+    const to = view.state.doc.line(block.end + 1).to;
+    const anchor = cmRangeAnchor(view, from, to);
+    const doc = activeDocument(this.app);
+
+    activeEditor = new GridEditor({
+      document: doc,
+      model,
+      anchor,
+      renderLabel: makeLabelRenderer(doc),
+      onCommit: (committed: DiagramModel | null) => {
+        activeEditor = null;
+        this.commitLivePreview(view, from, to, committed);
+      },
+      onDiscard: () => {
+        activeEditor = null;
+      },
+    });
+    activeEditor.mount();
+  }
+
+  /** Replace a Live Preview block's source range with a committed model. */
+  private commitLivePreview(
+    view: EditorView,
+    from: number,
+    to: number,
+    model: DiagramModel | null,
+  ): void {
+    if (model === null) {
+      // Empty draft: remove the block, including a trailing newline if one
+      // follows so we don't leave a blank line behind.
+      let removeTo = to;
+      if (removeTo < view.state.doc.length) {
+        const after = view.state.doc.sliceString(to, Math.min(to + 1, view.state.doc.length));
+        if (after === "\n") removeTo += 1;
+      }
+      view.dispatch({
+        changes: { from, to: removeTo, insert: "" },
+        selection: EditorSelection.cursor(from),
+      });
+      return;
+    }
+    const fenced = `${FENCE}${CD_LANGUAGE}\n${serializeDiagram(model)}\n${FENCE}`;
+    view.dispatch({
+      changes: { from, to, insert: fenced },
+      // Place the cursor just past the block so the widget re-renders and the
+      // user isn't left sitting inside the (now raw) fenced region.
+      selection: EditorSelection.cursor(from + fenced.length),
+    });
+  }
+
   /** Replace (or remove) a `cd` block's source range with a committed model. */
   private async writeBlock(
     sourcePath: string,
@@ -255,6 +339,26 @@ function activeWindow(): Window {
 function svgRectAnchor(svg: SVGElement): { x: number; y: number } {
   const rect = svg.getBoundingClientRect();
   return { x: rect.left, y: rect.bottom + 6 };
+}
+
+/**
+ * Anchor point (viewport coords) for an editor reopening over a Live Preview
+ * block. Measure the on-screen box of the block's source range; fall back to a
+ * sensible default if coordsAtPos can't resolve it.
+ */
+function cmRangeAnchor(view: EditorView, from: number, to: number): { x: number; y: number } {
+  try {
+    const a = view.coordsAtPos(from);
+    const b = view.coordsAtPos(to);
+    if (a) {
+      const left = a.left;
+      const bottom = b ? Math.max(a.bottom, b.bottom) : a.bottom;
+      return { x: left, y: bottom + 6 };
+    }
+  } catch {
+    // fall through
+  }
+  return { x: 160, y: 160 };
 }
 
 /**

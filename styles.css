@@ -364,3 +364,25 @@
   transform: translateX(-50%);
 }
 
+/* --- Phase 3: Live Preview display widget (§8.2) --- */
+
+/* The widget replaces a ```cd block in Live Preview. Match the Reading-view
+   wrapper's centering so a diagram reads identically in both modes. */
+.cd-lp-wrap {
+  margin: 0.25em 0;
+  text-align: center;
+}
+
+.cd-lp-wrap .cd-diagram-svg {
+  margin: 0 auto;
+}
+
+/* Tiny placeholder shown while MathJax typesets the diagram (one frame). */
+.cd-lp-placeholder {
+  display: inline-block;
+  min-height: 1em;
+  color: var(--text-muted);
+  opacity: 0.5;
+  letter-spacing: 2px;
+}
+
