@@ -19,7 +19,11 @@ const metrics: CDStyleMetrics = {
 /** Deterministic measurer: 10px per character, 20px tall. */
 const measure = (s: string) => ({ width: s.length * 10, height: 20 });
 
-const C = deriveRenderConstants(metrics); // cellPad 3.96, headLen 6.12, step 9, labelGap 5.04
+const C = deriveRenderConstants(metrics); // derived from fontSize 18
+
+// Half label extents for the measurer above, for a single-character label.
+const HW = 5; // width 10 / 2
+const HH = 10; // height 20 / 2
 
 function close(a: number, b: number, eps = 1e-6): boolean {
   return Math.abs(a - b) < eps;
@@ -82,10 +86,10 @@ test("horizontal arrow clips to label box edges, not centers", () => {
   const layout = layoutDiagram(m, measure, metrics);
   assert.equal(layout.arrows.length, 1);
   const a = layout.arrows[0];
-  // centers: (5,10) and (42,10); padded half extents: 5+3.96 = 8.96
-  assert.ok(close(a.x1, 5 + 8.96));
+  // centers: (5,10) and (42,10); padded half width = HW + cellPad
+  assert.ok(close(a.x1, 5 + HW + C.cellPad));
   assert.ok(close(a.y1, 10));
-  assert.ok(close(a.x2, 42 - 8.96));
+  assert.ok(close(a.x2, 42 - HW - C.cellPad));
   assert.ok(close(a.y2, 10));
   assert.ok(close(a.dirX, 1));
   assert.ok(close(a.dirY, 0));
@@ -99,11 +103,11 @@ test("vertical arrow clips to top/bottom edges", () => {
   m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 1, col: 0 } });
   const layout = layoutDiagram(m, measure, metrics);
   const a = layout.arrows[0];
-  // centers: (5,10) and (5,57); padded half height: 10+3.96 = 13.96
+  // centers: (5,10) and (5,57); padded half height = HH + cellPad
   assert.ok(close(a.x1, 5));
-  assert.ok(close(a.y1, 10 + 13.96));
+  assert.ok(close(a.y1, 10 + HH + C.cellPad));
   assert.ok(close(a.x2, 5));
-  assert.ok(close(a.y2, 57 - 13.96));
+  assert.ok(close(a.y2, 57 - HH - C.cellPad));
   assert.ok(close(a.dirX, 0));
   assert.ok(close(a.dirY, 1));
 });
@@ -116,13 +120,13 @@ test("diagonal arrow exits through the box edge, not the center", () => {
   m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 1, col: 1 } });
   const layout = layoutDiagram(m, measure, metrics);
   const a = layout.arrows[0];
-  // c1=(5,10), c2=(42,57); dir=(37,47)/len. tx = 8.96/dirX < ty = 13.96/dirY,
+  // c1=(5,10), c2=(42,57); dir=(37,47)/len. tx = (HW+cellPad)/dirX < ty = (HH+cellPad)/dirY,
   // so the shaft exits through the RIGHT edge of the source box.
-  assert.ok(close(a.x1, 5 + 8.96, 1e-3));
-  assert.ok(a.y1 > 10 && a.y1 < 10 + 13.96);
+  assert.ok(close(a.x1, 5 + HW + C.cellPad, 1e-3));
+  assert.ok(a.y1 > 10 && a.y1 < 10 + HH + C.cellPad);
   // and enters through the LEFT edge of the target box
-  assert.ok(close(a.x2, 42 - 8.96, 1e-3));
-  assert.ok(a.y2 < 57 && a.y2 > 57 - 13.96);
+  assert.ok(close(a.x2, 42 - HW - C.cellPad, 1e-3));
+  assert.ok(a.y2 < 57 && a.y2 > 57 - HH - C.cellPad);
 });
 
 test("parallel arrows on the same pair are offset symmetrically", () => {
@@ -166,9 +170,9 @@ test("skip arrow is a straight line through intervening cells", () => {
   const a = layout.arrows[0];
   assert.ok(close(a.y1, 10));
   assert.ok(close(a.y2, 10));
-  assert.ok(close(a.x1, 5 + 8.96));
+  assert.ok(close(a.x1, 5 + HW + C.cellPad));
   // third column center: 10+27+10+27+5 = 79
-  assert.ok(close(a.x2, 79 - 8.96));
+  assert.ok(close(a.x2, 79 - HW - C.cellPad));
 });
 
 test("arrow label defaults to the left of the direction of travel", () => {
@@ -180,7 +184,7 @@ test("arrow label defaults to the left of the direction of travel", () => {
   assert.equal(a.label, "f");
   assert.equal(a.labelPosition, "left");
   const midX = (a.x1 + a.x2) / 2;
-  // above the shaft: labelGap + half label height = 5.04 + 10
+  // above the shaft: labelGap + half label height
   assert.ok(close(a.labelX!, midX));
   assert.ok(close(a.labelY!, 10 - (C.labelGap + 10)));
   // viewBox grows to include the overflowing label
@@ -241,10 +245,10 @@ test("degenerate self-arrows and out-of-grid arrows are dropped", () => {
 });
 
 test("derived constants scale from the font size", () => {
-  assert.ok(close(C.cellPad, 18 * 0.22));
+  assert.ok(close(C.cellPad, 18 * 0.34));
   assert.ok(close(C.headLen, 18 * 0.34));
   assert.ok(close(C.multiArrowStep, 18 * 0.5));
-  assert.ok(close(C.labelGap, 18 * 0.28));
+  assert.ok(close(C.labelGap, 18 * 0.4));
   assert.match(C.dashedArray, /^\d+(\.\d+)? \d+(\.\d+)?$/);
   assert.match(C.dottedArray, /^0\.01 \d+(\.\d+)?$/);
 });

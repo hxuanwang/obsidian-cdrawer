@@ -159,13 +159,16 @@ export function deriveRenderConstants(metrics: CDStyleMetrics): RenderConstants 
   const headLen = fs * 0.34;
   const headHalf = headLen * 0.52;
   return {
-    cellPad: fs * 0.22,
+    // Clearance between a label's bounding box and the arrow shaft anchor —
+    // a larger value leaves more air between a character and its arrow.
+    cellPad: fs * 0.34,
     headLen,
     headHalf,
     tailTickHalf: headHalf * 1.05,
     hookLen: headLen * 0.75,
     multiArrowStep: fs * 0.5,
-    labelGap: fs * 0.28,
+    // Gap between an arrow shaft and its label box.
+    labelGap: fs * 0.4,
     svgPad: headLen + headHalf + metrics.arrowStrokeWidth + 2,
     dashedArray: `${r2(fs * 0.36)} ${r2(fs * 0.24)}`,
     dottedArray: `0.01 ${r2(fs * 0.26)}`,
@@ -210,8 +213,9 @@ export function layoutDiagram(
     rowHeights.push(h);
   }
 
-  // §6.4: gaps floor at minGap (~1.25x line height, the AMS \arrowlength
-  // ratio) so short-label diagrams space identically to native CD blocks.
+  // §6.4: gaps floor at minGap (AMS \arrowlength, 3em = 3 × fontSize) so
+  // short-label diagrams space — and arrows run — identically to a native
+  // CD block. Grows further only as content forces it (§6.1).
   const colGaps = repeat(Math.max(0, cols - 1), metrics.minGap);
   const rowGaps = repeat(Math.max(0, rows - 1), metrics.minGap);
 
@@ -386,36 +390,94 @@ export function renderDiagram(model: DiagramModel, opts: RenderOptions = {}): SV
   const metrics = opts.metrics ?? getCDStyleMetrics(doc);
   const renderLabel = opts.renderLabel ?? defaultLabelRenderer(doc, metrics);
 
-  // Render and measure each unique label exactly once; repeated labels are
-  // cloned from the measured prototype (MathJax CHTML clones cleanly).
+  const { layout, elementFor } = prepareLayout(model, opts, doc, metrics, renderLabel);
+  return buildSvg(doc, layout, elementFor);
+}
+
+/**
+ * Async variant: renders labels, awaits MathJax typesetting, then measures
+ * and builds the SVG. Use this in Obsidian (where MathJax typesets
+ * asynchronously) so \phi / X^{n} aren't captured as empty pre-typeset nodes.
+ * Falls back to synchronous measurement when MathJax is absent.
+ */
+export async function renderDiagramAsync(
+  model: DiagramModel,
+  opts: RenderOptions = {},
+): Promise<SVGElement> {
+  const doc = opts.document ?? (typeof document !== "undefined" ? document : undefined);
+  if (!doc) {
+    throw new Error("renderDiagram requires a DOM document (pass opts.document)");
+  }
+  const metrics = opts.metrics ?? getCDStyleMetrics(doc);
+  const renderLabel = opts.renderLabel ?? defaultLabelRenderer(doc, metrics);
+
+  // Mount prototypes and wait for MathJax to fill them before measuring.
   const prototypes = new Map<string, HTMLElement>();
   const measured = new Map<string, MeasuredSize>();
-
   let measure: LabelMeasurer;
   if (opts.measureLabel) {
     measure = opts.measureLabel;
   } else {
-    const unique = new Set<string>();
-    for (const c of model.cells) if (c.label.trim() !== "") unique.add(c.label);
-    for (const a of model.arrows) if (a.label && a.label.trim() !== "") unique.add(a.label);
-    measureLabels(doc, renderLabel, unique, prototypes, measured, metrics);
-    measure = (latex: string): MeasuredSize => {
-      const m = measured.get(latex);
-      if (m) return m;
-      const est = estimateSize(latex, metrics);
-      measured.set(latex, est);
-      return est;
-    };
+    const unique = collectLabels(model);
+    const host = mountLabelHost(doc, renderLabel, unique, prototypes, measured, metrics);
+    if (host) {
+      await awaitMathJaxTypeset(doc, host);
+      measureMountedLabels(host, prototypes, measured, metrics);
+    }
+    measure = makeMeasure(measured, metrics);
   }
-
   const layout = layoutDiagram(model, measure, metrics);
-
   const elementFor = (latex: string): HTMLElement => {
     const proto = prototypes.get(latex);
     if (proto) return proto.cloneNode(true) as HTMLElement;
     return renderLabel(latex);
   };
   return buildSvg(doc, layout, elementFor);
+}
+
+/** Shared sync prep for renderDiagram (and a base for the async path). */
+function prepareLayout(
+  model: DiagramModel,
+  opts: RenderOptions,
+  doc: Document,
+  metrics: CDStyleMetrics,
+  renderLabel: LabelRenderer,
+): { layout: DiagramLayout; elementFor: (latex: string) => HTMLElement } {
+  const prototypes = new Map<string, HTMLElement>();
+  const measured = new Map<string, MeasuredSize>();
+  let measure: LabelMeasurer;
+  if (opts.measureLabel) {
+    measure = opts.measureLabel;
+  } else {
+    const unique = collectLabels(model);
+    const host = mountLabelHost(doc, renderLabel, unique, prototypes, measured, metrics);
+    if (host) measureMountedLabels(host, prototypes, measured, metrics);
+    measure = makeMeasure(measured, metrics);
+  }
+  const layout = layoutDiagram(model, measure, metrics);
+  const elementFor = (latex: string): HTMLElement => {
+    const proto = prototypes.get(latex);
+    if (proto) return proto.cloneNode(true) as HTMLElement;
+    return renderLabel(latex);
+  };
+  return { layout, elementFor };
+}
+
+function collectLabels(model: DiagramModel): Set<string> {
+  const unique = new Set<string>();
+  for (const c of model.cells) if (c.label.trim() !== "") unique.add(c.label);
+  for (const a of model.arrows) if (a.label && a.label.trim() !== "") unique.add(a.label);
+  return unique;
+}
+
+function makeMeasure(measured: Map<string, MeasuredSize>, metrics: CDStyleMetrics): LabelMeasurer {
+  return (latex: string): MeasuredSize => {
+    const m = measured.get(latex);
+    if (m) return m;
+    const est = estimateSize(latex, metrics);
+    measured.set(latex, est);
+    return est;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -669,19 +731,27 @@ function defaultLabelRenderer(doc: Document, metrics: CDStyleMetrics): LabelRend
   };
 }
 
-/** Render each unique label once into a hidden host and measure it. */
-function measureLabels(
+/**
+ * Render each unique label once into a hidden host. The host stays mounted
+ * (returned to the caller) so MathJax can typeset it asynchronously; call
+ * `measureMountedLabels` after typesetting to read real offsets. Prototypes
+ * are stored so the SVG builder can clone the now-filled nodes.
+ *
+ * Returns null (and fills `measured` with estimates) when there's no document
+ * body to mount into.
+ */
+function mountLabelHost(
   doc: Document,
   renderLabel: LabelRenderer,
   labels: Set<string>,
   prototypes: Map<string, HTMLElement>,
   measured: Map<string, MeasuredSize>,
   metrics: CDStyleMetrics,
-): void {
-  if (labels.size === 0) return;
+): HTMLElement | null {
+  if (labels.size === 0) return null;
   if (!doc.body) {
     for (const latex of labels) measured.set(latex, estimateSize(latex, metrics));
-    return;
+    return null;
   }
   const host = doc.createElement("div");
   host.style.position = "absolute";
@@ -690,20 +760,29 @@ function measureLabels(
   host.style.top = "0";
   host.style.pointerEvents = "none";
   doc.body.appendChild(host);
-  try {
-    for (const latex of labels) {
-      const el = renderLabel(latex);
-      prototypes.set(latex, el);
-      host.appendChild(el);
-      const est = estimateSize(latex, metrics);
-      measured.set(latex, {
-        width: el.offsetWidth > 0 ? el.offsetWidth : est.width,
-        height: el.offsetHeight > 0 ? el.offsetHeight : est.height,
-      });
-    }
-  } finally {
-    host.remove();
+  for (const latex of labels) {
+    const el = renderLabel(latex);
+    prototypes.set(latex, el);
+    host.appendChild(el);
   }
+  return host;
+}
+
+/** Read real offsets from a mounted, typeset label host into `measured`. */
+function measureMountedLabels(
+  host: HTMLElement,
+  prototypes: Map<string, HTMLElement>,
+  measured: Map<string, MeasuredSize>,
+  metrics: CDStyleMetrics,
+): void {
+  for (const [latex, el] of prototypes) {
+    const est = estimateSize(latex, metrics);
+    measured.set(latex, {
+      width: el.offsetWidth > 0 ? el.offsetWidth : est.width,
+      height: el.offsetHeight > 0 ? el.offsetHeight : est.height,
+    });
+  }
+  host.remove();
 }
 
 /** Rough size estimate used only when real measurement is impossible. */
@@ -712,6 +791,34 @@ function estimateSize(latex: string, metrics: CDStyleMetrics): MeasuredSize {
     width: Math.max(1, latex.length) * metrics.fontSize * 0.5,
     height: metrics.fontSize * 1.25,
   };
+}
+
+/**
+ * Wait for MathJax to finish typesetting the given host's descendants.
+ * Obsidian ships MathJax (CHTML output) which typesets asynchronously:
+ * renderMath() returns an element whose content is filled in on a later
+ * microtask. Measuring or cloning it immediately captures an empty node, so
+ * \phi / X^{n} render as blank boxes and single characters only work by luck.
+ *
+ * Resolves immediately when MathJax isn't present (tests, text fallback) so
+ * callers stay synchronous in those environments.
+ */
+function awaitMathJaxTypeset(doc: Document, host: HTMLElement): Promise<void> {
+  const w = typeof window !== "undefined" ? (window as unknown as {
+    MathJax?: {
+      typesetPromise?: (els: (HTMLElement | Element)[]) => Promise<unknown>;
+      startup?: { promise?: Promise<unknown> };
+    };
+  }) : undefined;
+  const mj = w?.MathJax;
+  if (!mj) return Promise.resolve();
+  // Ensure the loader/startup finished, then typeset just our host.
+  const startup = mj.startup?.promise ?? Promise.resolve();
+  const typeset =
+    typeof mj.typesetPromise === "function"
+      ? mj.typesetPromise([host])
+      : Promise.resolve();
+  return Promise.all([startup, typeset]).then(() => undefined);
 }
 
 // ---------------------------------------------------------------------------

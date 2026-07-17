@@ -16,8 +16,14 @@
 }
 
 .cd-diagram-wrap {
-  display: inline-block;
-  margin: 0.25em 0;
+  display: block;
+  margin: 0.25em auto;
+  text-align: center;
+}
+
+.cd-diagram-wrap .cd-diagram-svg {
+  /* Center the SVG within the reading column instead of left-aligning it. */
+  margin: 0 auto;
 }
 
 .cd-error {

@@ -17,7 +17,9 @@ export interface CDStyleMetrics {
   lineHeight: number;
   /** Arrow stroke width (px), measured from a native CD arrow glyph. */
   arrowStrokeWidth: number;
-  /** Minimum row/column gap (px) — ~1.25x line height (AMS \arrowlength). */
+  /** Minimum row/column gap (px) — AMS \arrowlength, which defaults to 3em
+   *  (= 3 × fontSize). Drives the visible arrow length for short-label
+   *  diagrams so they space identically to a native CD block (§6.4). */
   minGap: number;
 }
 
@@ -37,7 +39,7 @@ export function getCDStyleMetrics(doc: Document = document): CDStyleMetrics {
     fontSize: 18,
     lineHeight: 22,
     arrowStrokeWidth: 0.9,
-    minGap: 27,
+    minGap: 54, // 3 × fontSize (AMS \arrowlength default)
   };
 
   try {
@@ -103,7 +105,11 @@ function measureWithMathJax(doc: Document): CDStyleMetrics | null {
       }
     }
 
-    const minGap = Math.round(lineHeight * 1.25);
+    // AMS \arrowlength defaults to 3em = 3 × font size (the source of truth
+    // for native CD arrow length; the §6.4 "~1.25× line height" note in the
+    // plan was incorrect). Floor the gap here so short-label diagrams space
+    // identically to a native CD block.
+    const minGap = Math.round(fontSize * 3);
     return { fontSize, lineHeight, arrowStrokeWidth, minGap };
   } finally {
     host.remove();

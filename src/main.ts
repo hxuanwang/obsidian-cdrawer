@@ -11,10 +11,10 @@
  * note, gated by the §6.4 side-by-side visual check.
  */
 
-import { Plugin } from "obsidian";
+import { Plugin, renderMath } from "obsidian";
 
 import { parseDiagram } from "./diagram/model";
-import { renderDiagram } from "./diagram/render";
+import { renderDiagramAsync, type LabelRenderer } from "./diagram/render";
 import { resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
 
 const CD_LANGUAGE = "cd";
@@ -25,8 +25,8 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // click-to-edit interaction yet (that is Phase 3).
     this.registerMarkdownCodeBlockProcessor(
       CD_LANGUAGE,
-      (source, el, ctx) => {
-        this.renderCdBlock(source, el, ctx.sourcePath);
+      async (source, el, ctx) => {
+        await this.renderCdBlock(source, el, ctx.sourcePath);
       },
     );
 
@@ -43,7 +43,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
    * Invalid JSON is surfaced inline (rather than throwing) so a malformed
    * block doesn't break the rest of the note's rendering.
    */
-  private renderCdBlock(source: string, el: HTMLElement, _sourcePath: string): void {
+  private async renderCdBlock(source: string, el: HTMLElement, _sourcePath: string): Promise<void> {
     el.addClass("cd-diagram-wrap");
     el.empty();
 
@@ -60,7 +60,13 @@ export default class CommutativeDiagramPlugin extends Plugin {
     }
 
     try {
-      const svg = renderDiagram(model, { document: el.doc });
+      const svg = await renderDiagramAsync(model, {
+        document: el.doc,
+        // §4: labels are raw LaTeX rendered via Obsidian's built-in MathJax
+        // (renderMath from the `obsidian` module), not plain text. Without this
+        // \phi / X^{n} render literally instead of as math glyphs.
+        renderLabel: makeLabelRenderer(el.doc),
+      });
       el.appendChild(svg);
     } catch (err) {
       const msg = el.createEl("div", {
@@ -70,4 +76,27 @@ export default class CommutativeDiagramPlugin extends Plugin {
       msg.setAttribute("role", "alert");
     }
   }
+}
+
+/**
+ * Build a LabelRenderer backed by Obsidian's renderMath (MathJax). Mirrors the
+ * container shape of render.ts's internal defaultLabelRenderer so the SVG
+ * builder's measure/clone path works identically.
+ */
+function makeLabelRenderer(doc: Document): LabelRenderer {
+  return (latex: string): HTMLElement => {
+    const host = doc.createElement("div");
+    host.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+    host.className = "cd-rendered-label";
+    try {
+      host.appendChild(renderMath(latex, false));
+    } catch {
+      // Bad LaTeX snippet: show the source verbatim rather than failing the
+      // whole diagram (matches render.ts's fallback policy).
+      const span = doc.createElement("span");
+      span.textContent = latex;
+      host.appendChild(span);
+    }
+    return host;
+  };
 }
