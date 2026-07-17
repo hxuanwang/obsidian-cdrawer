@@ -1,0 +1,253 @@
+/* obsidian-cdrawer styles */
+
+.cd-diagram-svg {
+  display: inline-block;
+  background: transparent;
+  cursor: pointer;
+}
+
+.cd-diagram-wrap {
+  display: inline-block;
+  margin: 0.25em 0;
+}
+
+.cd-diagram-wrap.is-hover-edit .cd-edit-hint {
+  display: inline-flex;
+}
+
+.cd-edit-hint {
+  display: none;
+  align-items: center;
+  margin-left: 0.4em;
+  opacity: 0.6;
+  font-size: 0.8em;
+  vertical-align: middle;
+}
+
+/* Floating grid editor overlay */
+.cd-editor-overlay {
+  position: fixed;
+  z-index: 1000;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.cd-editor-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cd-editor-title {
+  font-weight: 600;
+}
+
+.cd-editor-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.cd-editor-grid {
+  display: grid;
+  gap: 4px;
+  position: relative;
+  background: var(--background-secondary);
+  padding: 18px 6px 6px 18px;
+  border-radius: 4px;
+}
+
+.cd-cell {
+  position: relative;
+  min-width: 56px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  cursor: text;
+  padding: 2px 6px;
+  user-select: none;
+}
+
+.cd-cell.is-empty {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.cd-cell.is-focused {
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 2px var(--interactive-accent-hover);
+}
+
+.cd-cell-label {
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cd-cell-input {
+  position: absolute;
+  inset: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-normal);
+  font: inherit;
+  outline: none;
+  width: calc(100% - 12px);
+}
+
+.cd-cell-preview {
+  pointer-events: none;
+}
+
+.cd-col-header,
+.cd-row-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+  opacity: 0.5;
+}
+
+.cd-add-btn {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--background-modifier-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0 6px;
+  min-width: 20px;
+  min-height: 20px;
+}
+
+.cd-add-btn:hover {
+  color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+.cd-remove-btn {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+  border: none;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.cd-col-header:hover .cd-remove-btn,
+.cd-row-header:hover .cd-remove-btn {
+  display: flex;
+}
+
+.cd-svg-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.cd-arrow-path {
+  fill: none;
+  stroke: var(--text-normal);
+  stroke-width: 1;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.cd-arrow-path.is-selected {
+  stroke: var(--interactive-accent);
+}
+
+.cd-arrow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.cd-arrow-label {
+  font-size: 0.85em;
+  fill: var(--text-normal);
+}
+
+.cd-properties {
+  position: absolute;
+  z-index: 1001;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--font-ui-smaller);
+  min-width: 200px;
+}
+
+.cd-properties label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cd-properties .cd-prop-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.cd-properties input[type="text"],
+.cd-properties select {
+  width: 100%;
+}
+
+.cd-drag-line {
+  fill: none;
+  stroke: var(--interactive-accent);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+/* Arrow-drag handle band around cells */
+.cd-cell-drag-band {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cd-cell.is-drag-source .cd-cell-drag-band {
+  pointer-events: auto;
+  cursor: crosshair;
+}

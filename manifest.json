@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-cdrawer",
+  "name": "Commutative Diagram Editor",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Insert and edit commutative diagrams on a fixed grid. Renders to SVG matching native CD styling. Export to tikz-cd and AMS CD.",
+  "author": "obsidian-cdrawer",
+  "authorUrl": "https://github.com/obsidian-cdrawer/obsidian-cdrawer",
+  "isDesktopOnly": false
+}
