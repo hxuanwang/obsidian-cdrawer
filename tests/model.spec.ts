@@ -6,7 +6,7 @@ import {
   trimTrailing, isEmpty, parseDiagram, serializeDiagram, addArrow,
   removeArrow, updateArrow, rowDeletionIsDestructive, colDeletionIsDestructive,
   _resetIdCounter, nextArrowId,
-} from "../src/diagram/model.ts";
+} from "../src/diagram/model";
 
 function roundTrip(m: ReturnType<typeof createEmptyModel> & object) {
   return parseDiagram(serializeDiagram(m));

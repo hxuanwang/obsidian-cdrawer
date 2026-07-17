@@ -4,11 +4,30 @@
   display: inline-block;
   background: transparent;
   cursor: pointer;
+  /* Strokes inside the SVG use currentColor — track the theme like native math (§6.4). */
+  color: var(--text-normal);
+}
+
+/* Label container inside the SVG's foreignObject (render.ts). */
+.cd-rendered-label {
+  display: inline-block;
+  line-height: 1.2;
+  color: var(--text-normal);
 }
 
 .cd-diagram-wrap {
   display: inline-block;
   margin: 0.25em 0;
+}
+
+.cd-error {
+  display: inline-block;
+  padding: 0.2em 0.5em;
+  color: var(--text-error);
+  background: var(--background-modifier-error);
+  border-radius: 4px;
+  font-family: var(--font-monospace);
+  font-size: 0.85em;
 }
 
 .cd-diagram-wrap.is-hover-edit .cd-edit-hint {

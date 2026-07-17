@@ -5,7 +5,6 @@
     "target": "ES2018",
     "moduleResolution": "node",
     "lib": ["DOM", "ES2018"],
-    "sourceMap": true,
     "inlineSourceMap": true,
     "inlineSources": true,
     "allowJs": true,
