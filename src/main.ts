@@ -69,9 +69,15 @@ export default class CommutativeDiagramPlugin extends Plugin {
     this.addSettingTab(new CDSettingTab(this.app, this));
 
     // --- Phase 2: triggers (§7.1) ---
-    this.addRibbonIcon("grid", "Insert commutative diagram", () => {
+    // Ribbon icon: a custom glyph (a homotopy-lifting-property square — four
+    // dots as the objects, solid arrows on two edges, a dashed diagonal lift)
+    // rather than Obsidian's table-like "grid" Lucide icon, so the ribbon reads
+    // as "commutative diagram" at a glance. addRibbonIcon only accepts a Lucide
+    // id, so we mount with a placeholder then swap in our own SVG.
+    const ribbon = this.addRibbonIcon("square-pen", "Insert commutative diagram", () => {
       this.openEditorForActiveLeaf();
     });
+    setRibbonIconSvg(ribbon, HLP_ICON_SVG);
 
     this.addCommand({
       id: "insert-commutative-diagram",
@@ -520,6 +526,47 @@ function activeDocument(app: App): Document {
 
 function activeWindow(): Window {
   return typeof window !== "undefined" ? window : (globalThis as unknown as { window: Window }).window;
+}
+
+/**
+ * Custom ribbon glyph: the homotopy-lifting-property square. Four dots stand
+ * for the objects of the square; solid arrows run along the top and right
+ * edges; a dashed diagonal with an arrowhead is the lift — the diagram that
+ * names the property. Dots-as-labels match how the HLP square is usually
+ * sketched (and keep the icon legible at ribbon size, where real LaTeX glyphs
+ * would be unreadable).
+ */
+const HLP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="6" cy="6" r="1.9" fill="currentColor" stroke="none"/>
+  <circle cx="18" cy="6" r="1.9" fill="currentColor" stroke="none"/>
+  <circle cx="6" cy="18" r="1.9" fill="currentColor" stroke="none"/>
+  <circle cx="18" cy="18" r="1.9" fill="currentColor" stroke="none"/>
+  <path d="M8.4 6 H15.2"/>
+  <path d="M13 4.2 L15.4 6 L13 7.8"/>
+  <path d="M18 8.4 V15.2"/>
+  <path d="M16.2 13 L18 15.4 L19.8 13"/>
+  <path d="M8 8 L15.5 15.5" stroke-dasharray="2.2 2.2"/>
+  <path d="M12.8 15.6 L15.7 15.7 L15.6 12.8"/>
+</svg>`;
+
+/**
+ * Replace a ribbon button's Lucide icon with a raw SVG string. addRibbonIcon
+ * builds its inner `.svg-icon` from a Lucide id; we swap that node for one
+ * parsed from `svg` so a custom glyph renders. Keeps the ribbon's click
+ * handler and Obsidian's sizing/aria attributes intact.
+ */
+function setRibbonIconSvg(ribbon: HTMLElement, svg: string): void {
+  const old = ribbon.querySelector(".svg-icon");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = svg.trim();
+  const node = tmp.firstElementChild;
+  if (!node) return;
+  node.classList.add("svg-icon", "cd-ribbon-icon");
+  // Match the sizing Lucide icons get inside a ribbon button.
+  (node as SVGElement).setAttribute("width", "20");
+  (node as SVGElement).setAttribute("height", "20");
+  if (old) old.replaceWith(node);
+  else ribbon.appendChild(node);
 }
 
 /** Anchor point (viewport coords) for an editor reopening over a diagram. */

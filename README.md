@@ -65,7 +65,8 @@ what you get after committing.
 
 Open the editor in any of three ways:
 
-- the **ribbon icon** (grid glyph),
+- the **ribbon icon** (a homotopy-lifting-property square — four dots with a
+  dashed diagonal lift),
 - the command palette → **"Insert commutative diagram"** (bindable to a hotkey),
 - right-click in the editor → **"Insert commutative diagram"**.
 
@@ -76,7 +77,11 @@ Then in the grid:
 - **Drag from one cell to another** to draw an arrow. (A press that releases in
   place just edits the label, so the two gestures don't fight.)
 - **Click an arrow** to open its properties popover: label, label position
-  (left/right/above/below), head style, line style, bidirectional toggle, delete.
+  (left/right/above/below), head style, line style, bidirectional toggle, curve,
+  delete. **Curve an arrow** either by dragging the small handle that appears at
+  its midpoint when selected (drag perpendicular to the shaft) or with the
+  Curve slider in the popover; + bulges left of the arrow's travel, − right (and
+  a "Straighten" button resets it).
 - **+ row / + col** add rows/columns; hover a row or column header for a small
   **–** to remove it (destructive removes — those that would delete a label or
   arrow endpoint — are hidden, so you can't nuke content by accident).
@@ -134,6 +139,7 @@ pretty-printed JSON:
 | `arrows[].head` | `"default"` \| `"epi"` (↠) \| `"hook"` (↪) \| `"mapsto"` (↦) \| `"none"`. |
 | `arrows[].lineStyle` | `"solid"` (default) \| `"dashed"` \| `"dotted"`. |
 | `arrows[].bidirectional` | `true` renders a double-headed arrow (`<->`), for isomorphisms/equivalences. |
+| `arrows[].curve` | Signed `-1`…`1`; `0` (omitted) = straight shaft. The magnitude is how far the arc's apex deviates from the chord (as a fraction of its length); positive bulges left of the arrow's direction of travel (matching tikz-cd's `bend left`), negative right. Set by dragging the arrow's midpoint handle or the Curve slider. |
 
 Multiple arrows between the same pair of cells are offset symmetrically. The
 schema is additive-only across versions (new fields are optional), so existing
@@ -162,16 +168,18 @@ the diagram. The pullback square above exports to:
 which compiles unmodified in a document with `\usepackage{tikz-cd}`. Head/line
 vocabulary maps 1:1: `epi→two heads`, `hook→hook`, `mapsto→mapsto`,
 `none→no head`, `bidirectional→leftrightarrow`, `dashed`, `dotted`; a right-side
-label gets the `swap` marker.
+label gets the `swap` marker; a curved arrow exports as `bend left=<deg>` /
+`bend right=<deg>` (the curve magnitude maps to 10–60°, and importing tikz-cd
+with `bend left`/`bend right` rounds back to a curve).
 
 ### Export to AMS CD
 
 Command palette → **"Export diagram as AMS CD"** emits a `$$\begin{CD}…\end{CD}$$`
 block. This is only offered when the diagram is **CD-expressible** — every arrow
 connects orthogonally-adjacent cells with at most one label, no styled heads, no
-bidirectional, solid lines. Otherwise you get a notice explaining why (e.g.
-"contains a diagonal or skipped arrow — export as tikz-cd instead"), so you never
-get lossy output silently.
+bidirectional, no curves, solid lines. Otherwise you get a notice explaining why
+(e.g. "contains a diagonal or skipped arrow — export as tikz-cd instead"), so
+you never get lossy output silently.
 
 ### Import from tikz-cd
 

@@ -35,7 +35,7 @@ import type {
   LabelPosition,
   LineStyle,
 } from "./model";
-import { DEFAULT_HEAD, DEFAULT_LINE, getLabel } from "./model";
+import { DEFAULT_HEAD, DEFAULT_LINE, getLabel, CURVE_MIN, CURVE_MAX, CURVE_APEX_FRAC } from "./model";
 import type { CDStyleMetrics } from "./cd-style-metrics";
 import { getCDStyleMetrics } from "./cd-style-metrics";
 
@@ -102,9 +102,23 @@ export interface ArrowLayout {
   y1: number;
   x2: number;
   y2: number;
-  /** Unit direction of travel (from -> to). */
+  /** Unit direction of travel (from -> to). For a curved arrow this is the
+   *  CHORD direction; head/tail decorations use the tangent at each end
+   *  (startDir / endDir) instead. */
   dirX: number;
   dirY: number;
+  /** Unit tangent at the start (tail) of the shaft. Equals (dirX,dirY) when
+   *  straight; rotated toward the bulge when curved. */
+  startDirX: number;
+  startDirY: number;
+  /** Unit tangent at the end (head) of the shaft. */
+  endDirX: number;
+  endDirY: number;
+  /** Quadratic-Bézier control point for a curved shaft (undefined if straight). */
+  ctrlX?: number;
+  ctrlY?: number;
+  /** Signed curve amount [-1,1]; 0 = straight. */
+  curve: number;
   head: ArrowHead;
   lineStyle: LineStyle;
   bidirectional: boolean;
@@ -288,16 +302,66 @@ export function layoutDiagram(
     const s = clipToBox(c1.cx, c1.cy, dx, dy, hw1, hh1);
     const e = clipToBox(c2.cx, c2.cy, -dx, -dy, hw2, hh2);
 
+    const x1 = s.x + ox;
+    const y1 = s.y + oy;
+    const x2 = e.x + ox;
+    const y2 = e.y + oy;
+
+    // Curve (§6.2 curves): a signed quadratic Bézier bulge. curve ∈ [-1,1],
+    // 0 = straight. The bulge is to the LEFT of the arrow's direction of travel
+    // for curve > 0 (matching tikz-cd's "bend left"); perpLeft(dx,dy)=(dy,-dx).
+    // The apex (point at t=0.5) deviates from the chord midpoint by
+    // curve * chordLen * CURVE_APEX_FRAC; the Bézier control point sits at
+    // twice that offset (apex = (S+2C+E)/4). Heads/tails attach along the
+    // tangent at each end (C-S and E-C), not the chord.
+    const curve = typeof a.curve === "number" && Number.isFinite(a.curve)
+      ? Math.max(CURVE_MIN, Math.min(CURVE_MAX, a.curve))
+      : 0;
+    const chordLen = Math.hypot(x2 - x1, y2 - y1);
+    let ctrlX: number | undefined;
+    let ctrlY: number | undefined;
+    let startDirX = dx;
+    let startDirY = dy;
+    let endDirX = dx;
+    let endDirY = dy;
+    let apexX = (x1 + x2) / 2;
+    let apexY = (y1 + y2) / 2;
+    if (curve !== 0 && chordLen > 1e-9) {
+      const perpX = dy; // perpLeft(dx,dy)
+      const perpY = -dx;
+      const apexOff = curve * chordLen * CURVE_APEX_FRAC;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      ctrlX = mx + perpX * (2 * apexOff);
+      ctrlY = my + perpY * (2 * apexOff);
+      apexX = mx + perpX * apexOff;
+      apexY = my + perpY * apexOff;
+      // Tangents at the endpoints of a quadratic Bézier.
+      const sd = unitOrFallback(ctrlX - x1, ctrlY - y1, dx, dy);
+      startDirX = sd.x;
+      startDirY = sd.y;
+      const ed = unitOrFallback(x2 - ctrlX, y2 - ctrlY, dx, dy);
+      endDirX = ed.x;
+      endDirY = ed.y;
+    }
+
     const out: ArrowLayout = {
       id: a.id,
       from: { row: a.from.row, col: a.from.col },
       to: { row: a.to.row, col: a.to.col },
-      x1: s.x + ox,
-      y1: s.y + oy,
-      x2: e.x + ox,
-      y2: e.y + oy,
+      x1,
+      y1,
+      x2,
+      y2,
       dirX: dx,
       dirY: dy,
+      startDirX,
+      startDirY,
+      endDirX,
+      endDirY,
+      ctrlX,
+      ctrlY,
+      curve,
       head: a.head ?? DEFAULT_HEAD,
       lineStyle: a.lineStyle ?? DEFAULT_LINE,
       bidirectional: a.bidirectional === true,
@@ -307,15 +371,15 @@ export function layoutDiagram(
     if (a.label && a.label.trim() !== "") {
       const ls = measure(a.label);
       const nrm = labelNormal(out.labelPosition, dx, dy);
-      const midX = (out.x1 + out.x2) / 2;
-      const midY = (out.y1 + out.y2) / 2;
-      // Perpendicular half-extent of the label box along the offset normal.
+      // Place the label at the curve's apex (for a straight arrow the apex is
+      // the chord midpoint, so this is unchanged), then push it out along the
+      // offset normal by the label gap + half the label's perpendicular extent.
       const perpHalf =
         (Math.abs(nrm.x) * ls.width) / 2 + (Math.abs(nrm.y) * ls.height) / 2;
       const dist = constants.labelGap + perpHalf;
       out.label = a.label;
-      out.labelX = midX + nrm.x * dist;
-      out.labelY = midY + nrm.y * dist;
+      out.labelX = apexX + nrm.x * dist;
+      out.labelY = apexY + nrm.y * dist;
       out.labelWidth = ls.width;
       out.labelHeight = ls.height;
     }
@@ -351,6 +415,16 @@ export function layoutDiagram(
   let maxX = gridW;
   let maxY = gridH;
   for (const a of arrows) {
+    // A curved shaft bulges past its chord; account for the apex so an unlabeled
+    // curve isn't clipped. (The apex sits on the curve at t=0.5.)
+    if (a.curve !== 0 && a.ctrlX !== undefined && a.ctrlY !== undefined) {
+      const ax = (a.x1 + 2 * a.ctrlX + a.x2) / 4;
+      const ay = (a.y1 + 2 * a.ctrlY + a.y2) / 4;
+      minX = Math.min(minX, ax);
+      maxX = Math.max(maxX, ax);
+      minY = Math.min(minY, ay);
+      maxY = Math.max(maxY, ay);
+    }
     if (a.labelX === undefined || a.labelY === undefined) continue;
     const lw = (a.labelWidth ?? 0) / 2;
     const lh = (a.labelHeight ?? 0) / 2;
@@ -543,27 +617,36 @@ function buildArrow(doc: Document, a: ArrowLayout, layout: DiagramLayout): SVGGE
   g.setAttribute("class", "cd-arrow");
   g.setAttribute("data-arrow-id", a.id);
 
-  // Shaft.
+  // Shaft. A curved arrow (curve !== 0, with a control point) draws a quadratic
+  // Bézier; otherwise a straight line. Heads/tails use the tangent directions
+  // (startDir/endDir) so they meet the curve cleanly at each end.
   const shaft = doc.createElementNS(SVG_NS, "path");
-  shaft.setAttribute("d", `M ${r2(a.x1)} ${r2(a.y1)} L ${r2(a.x2)} ${r2(a.y2)}`);
+  if (a.curve !== 0 && a.ctrlX !== undefined && a.ctrlY !== undefined) {
+    shaft.setAttribute(
+      "d",
+      `M ${r2(a.x1)} ${r2(a.y1)} Q ${r2(a.ctrlX)} ${r2(a.ctrlY)} ${r2(a.x2)} ${r2(a.y2)}`,
+    );
+  } else {
+    shaft.setAttribute("d", `M ${r2(a.x1)} ${r2(a.y1)} L ${r2(a.x2)} ${r2(a.y2)}`);
+  }
   shaft.setAttribute("class", `cd-arrow-shaft cd-line-${a.lineStyle}`);
   styleStroke(shaft, sw);
   if (a.lineStyle === "dashed") shaft.setAttribute("stroke-dasharray", C.dashedArray);
   if (a.lineStyle === "dotted") shaft.setAttribute("stroke-dasharray", C.dottedArray);
   g.appendChild(shaft);
 
-  // Head at the target end. mapsto/hook end in a plain arrowhead; their
-  // decoration lives at the tail.
-  appendHead(g, doc, headGlyph(a.head), a.x2, a.y2, a.dirX, a.dirY, C, sw);
+  // Head at the target end, along the end tangent. mapsto/hook end in a plain
+  // arrowhead; their decoration lives at the tail (along the start tangent).
+  appendHead(g, doc, headGlyph(a.head), a.x2, a.y2, a.endDirX, a.endDirY, C, sw);
 
   if (a.bidirectional) {
     // §6.2: double-headed arrow (isomorphisms/equivalences). A "none" head
     // makes no sense double-ended, so upgrade it to a plain head.
-    appendHead(g, doc, headGlyph(a.head === "none" ? "default" : a.head), a.x1, a.y1, -a.dirX, -a.dirY, C, sw);
+    appendHead(g, doc, headGlyph(a.head === "none" ? "default" : a.head), a.x1, a.y1, -a.startDirX, -a.startDirY, C, sw);
   } else if (a.head === "mapsto") {
-    appendMapstoBar(g, doc, a.x1, a.y1, a.dirX, a.dirY, C, sw);
+    appendMapstoBar(g, doc, a.x1, a.y1, a.startDirX, a.startDirY, C, sw);
   } else if (a.head === "hook") {
-    appendHookTail(g, doc, a.x1, a.y1, a.dirX, a.dirY, C, sw);
+    appendHookTail(g, doc, a.x1, a.y1, a.startDirX, a.startDirY, C, sw);
   }
   return g;
 }
@@ -636,8 +719,17 @@ function appendMapstoBar(
   g.appendChild(headPath(doc, d, sw));
 }
 
-/** hook (↪ / \hookrightarrow): a quarter-curve hook at the tail, on the
- *  left-of-travel side (up for a rightward arrow, matching the AMS glyph). */
+/** hook (↪ / \hookrightarrow): a small curl at the tail that originates from
+ *  BEHIND the shaft start (displaced against the direction of travel) and sweeps
+ *  up-and-forward to meet the shaft, on the left-of-travel side (up for a
+ *  rightward arrow, matching the AMS glyph).
+ *
+ *  Geometry: the start sits back-and-perpendicular to the tail, the control
+ *  pulls the curve up toward the perpendicular apex just past the tail, and the
+ *  end lands on the shaft a little ahead of the tail. Starting purely
+ *  perpendicular (the old shape) left the hook as a free tine running parallel
+ *  to the shaft — reading as a two-pronged fork, not a hook. Curling from
+ *  behind is what makes it read as ↪. */
 function appendHookTail(
   g: SVGGElement,
   doc: Document,
@@ -651,10 +743,11 @@ function appendHookTail(
   const px = dirY;
   const py = -dirX;
   const h = C.hookLen;
-  const sx = x + px * h;
-  const sy = y + py * h;
-  const cx = x + px * h + dirX * h;
-  const cy = y + py * h + dirY * h;
+  const back = h * 0.9; // how far behind the tail the curl originates
+  const sx = x - dirX * back + px * h;
+  const sy = y - dirY * back + py * h;
+  const cx = x + px * h * 0.6;
+  const cy = y + py * h * 0.6;
   const ex = x + dirX * h;
   const ey = y + dirY * h;
   g.appendChild(headPath(doc, `M ${r2(sx)} ${r2(sy)} Q ${r2(cx)} ${r2(cy)} ${r2(ex)} ${r2(ey)}`, sw));
@@ -859,6 +952,15 @@ function clipToBox(
   const ty = Math.abs(dy) < 1e-9 ? Infinity : hh / Math.abs(dy);
   const t = Math.min(tx, ty);
   return { x: cx + dx * t, y: cy + dy * t };
+}
+
+/** Unit vector along (x,y), falling back to (fx,fy) when (x,y) is ~zero (e.g.
+ *  a degenerate Bézier tangent when the control point coincides with an
+ *  endpoint — shouldn't happen for a real curve, but guards the math). */
+function unitOrFallback(x: number, y: number, fx: number, fy: number): { x: number; y: number } {
+  const len = Math.hypot(x, y);
+  if (len < 1e-9) return { x: fx, y: fy };
+  return { x: x / len, y: y / len };
 }
 
 /**

@@ -1,5 +1,13 @@
 /* obsidian-cdrawer styles */
 
+/* Custom ribbon glyph (the homotopy-lifting-property square, main.ts): keep it
+   sized like Obsidian's Lucide ribbon icons and inherit the theme text color. */
+.cd-ribbon-icon.svg-icon {
+  width: var(--icon-size, 20px);
+  height: var(--icon-size, 20px);
+  stroke: currentColor;
+}
+
 .cd-diagram-svg {
   display: inline-block;
   background: transparent;
@@ -279,6 +287,53 @@
   display: flex;
   gap: 6px;
   align-items: center;
+}
+
+/* Curve row: label, a range slider, and a live percent readout. */
+.cd-properties .cd-curve-row {
+  justify-content: space-between;
+}
+
+.cd-properties .cd-curve-row input[type="range"] {
+  flex: 1;
+  min-width: 80px;
+}
+
+.cd-properties .cd-curve-value {
+  min-width: 4em;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cd-properties .cd-curve-straighten {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  cursor: pointer;
+  font-size: var(--font-ui-smaller);
+}
+
+.cd-properties .cd-curve-straighten:hover {
+  color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+/* Draggable curve handle on a selected grid arrow: a small dot at the arc
+   apex. Drag it perpendicular to the shaft to set the curve. */
+.cd-curve-handle {
+  fill: var(--interactive-accent);
+  stroke: var(--background-primary);
+  stroke-width: 1.5;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+.cd-curve-handle:hover {
+  fill: var(--interactive-accent-hover);
 }
 
 .cd-properties input[type="text"],

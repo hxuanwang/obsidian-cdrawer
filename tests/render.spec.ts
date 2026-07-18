@@ -252,3 +252,93 @@ test("derived constants scale from the font size", () => {
   assert.match(C.dashedArray, /^\d+(\.\d+)? \d+(\.\d+)?$/);
   assert.match(C.dottedArray, /^0\.01 \d+(\.\d+)?$/);
 });
+
+// ---------------------------------------------------------------------------
+// curved arrows: Bézier control point, tangents, apex, label placement
+// ---------------------------------------------------------------------------
+
+test("a straight arrow has no control point and chord-parallel tangents", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 } });
+  const layout = layoutDiagram(m, measure, metrics);
+  const a = layout.arrows[0];
+  assert.equal(a.ctrlX, undefined);
+  assert.equal(a.ctrlY, undefined);
+  assert.equal(a.curve, 0);
+  assert.ok(close(a.startDirX, a.dirX));
+  assert.ok(close(a.startDirY, a.dirY));
+  assert.ok(close(a.endDirX, a.dirX));
+  assert.ok(close(a.endDirY, a.dirY));
+});
+
+test("a curved arrow carries a control point offset perpendicular to the chord", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0.5 });
+  const layout = layoutDiagram(m, measure, metrics);
+  const a = layout.arrows[0];
+  assert.equal(a.curve, 0.5);
+  assert.ok(a.ctrlX !== undefined && a.ctrlY !== undefined);
+  // Rightward arrow (dx=1, dy=0): perpLeft = (0,-1), so a positive curve
+  // bulges UP (negative y). Control point sits above the chord midpoint.
+  const midX = (a.x1 + a.x2) / 2;
+  const midY = (a.y1 + a.y2) / 2;
+  assert.ok(close(a.ctrlX!, midX));
+  assert.ok(a.ctrlY! < midY);
+  // The apex (t=0.5) is exactly half the control offset (apex = (S+2C+E)/4).
+  const apexY = (a.y1 + 2 * a.ctrlY! + a.y2) / 4;
+  const expectedOff = 0.5 * Math.hypot(a.x2 - a.x1, a.y2 - a.y1) * 0.28; // curve*chord*FRAC
+  assert.ok(close(midY - apexY, expectedOff));
+});
+
+test("a curved arrow's start/end tangents tilt toward the bulge", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 1 });
+  const layout = layoutDiagram(m, measure, metrics);
+  const a = layout.arrows[0];
+  // Chord is purely +x. With a strong upward bulge, the start tangent points
+  // up-and-right (positive x, negative y) and the end tangent down-and-right
+  // (positive x, positive y) — i.e. neither is purely horizontal anymore.
+  assert.ok(a.startDirX > 0 && a.startDirY < 0, "start tangent tilts up-right");
+  assert.ok(a.endDirX > 0 && a.endDirY > 0, "end tangent tilts down-right");
+});
+
+test("a curved arrow's label sits at the apex, not the chord midpoint", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0.5, label: "f" });
+  const layout = layoutDiagram(m, measure, metrics);
+  const a = layout.arrows[0];
+  assert.equal(a.label, "f");
+  const apexX = (a.x1 + 2 * a.ctrlX! + a.x2) / 4;
+  const apexY = (a.y1 + 2 * a.ctrlY! + a.y2) / 4;
+  // Label x is the apex x (the offset normal is purely vertical for a
+  // horizontal arrow with "left" position, so x is unaffected).
+  assert.ok(close(a.labelX!, apexX));
+  // Label y is the apex y pushed up by the gap + half the label height.
+  assert.ok(close(a.labelY!, apexY - (C.labelGap + 10)));
+});
+
+test("curve clamps to [-1, 1] and 0 is treated as straight", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 5 });
+  const layout = layoutDiagram(m, measure, metrics);
+  assert.equal(layout.arrows[0].curve, 1, "out-of-range positive clamps to 1");
+  let m2 = model1x2();
+  m2 = addArrow(m2, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: -5 });
+  assert.equal(layoutDiagram(m2, measure, metrics).arrows[0].curve, -1, "out-of-range negative clamps to -1");
+});
+
+test("viewBox grows to include a curved shaft's apex", () => {
+  _resetIdCounter();
+  let m = model1x2();
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 1 });
+  const layout = layoutDiagram(m, measure, metrics);
+  const a = layout.arrows[0];
+  const apexY = (a.y1 + 2 * a.ctrlY! + a.y2) / 4;
+  // The apex bulges above y=0; originY must be <= apexY - svgPad so it isn't clipped.
+  assert.ok(layout.originY <= apexY - C.svgPad + 1e-6);
+});

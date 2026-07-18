@@ -52,6 +52,7 @@ function shape(m: DiagramModel) {
         head: a.head ?? "default",
         lineStyle: a.lineStyle ?? "solid",
         bidirectional: a.bidirectional === true,
+        curve: a.curve ?? 0,
       }))
       .sort(compareArrow),
   };
@@ -429,4 +430,61 @@ test("CD-expressible model converts to tikz-cd and back losslessly", () => {
   m = addArrow(m, { from: { row: 1, col: 0 }, to: { row: 1, col: 1 }, label: "k" });
   const back = fromTikzcd(toTikzcd(m));
   assertShapeEqual(back, m, "CD-style model survives a tikz-cd round-trip");
+});
+
+// ---------------------------------------------------------------------------
+// curved arrows: tikz-cd bend mapping + round-trip
+// ---------------------------------------------------------------------------
+
+test("to-tikzcd emits bend left/right for a curved arrow and nothing for straight", () => {
+  _resetIdCounter();
+  let m = createEmptyModel(1, 3);
+  m = setCellLabel(m, 0, 0, "A");
+  m = setCellLabel(m, 0, 1, "B");
+  m = setCellLabel(m, 0, 2, "C");
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0.6, label: "f" });
+  m = addArrow(m, { from: { row: 0, col: 1 }, to: { row: 0, col: 2 }, curve: -0.4 });
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 2 } }); // straight
+  const tex = toTikzcd(m);
+  // curve 0.6 -> deg = round(10 + 0.6*50) = 40, positive -> bend left=40
+  // (the bend option is emitted before the label clause)
+  assert.match(tex, /\\arrow\[r, bend left=40, "f"\]/);
+  // curve -0.4 -> deg = round(10 + 0.4*50) = 30, negative -> bend right=30
+  // (B->C is a single step, so the direction is "r")
+  assert.match(tex, /\\arrow\[r, bend right=30\]/);
+  // straight arrow (A->C, a two-column skip): no bend option at all
+  assert.match(tex, /\\arrow\[rr\]/);
+});
+
+test("tikz-cd curve round-trips through bend left/right", () => {
+  _resetIdCounter();
+  let m = createEmptyModel(1, 2);
+  m = setCellLabel(m, 0, 0, "A");
+  m = setCellLabel(m, 0, 1, "B");
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0.6, label: "f" });
+  m = addArrow(m, { from: { row: 0, col: 1 }, to: { row: 0, col: 0 }, curve: -0.6, label: "g" });
+  const back = fromTikzcd(toTikzcd(m));
+  assertShapeEqual(back, m, "curved arrows survive a tikz-cd round-trip");
+});
+
+test("from-tikzcd parses bare bend left/right (default 30deg) and explicit angles", () => {
+  const tex = `\\begin{tikzcd}
+  A \\arrow[r, bend left] & B \\arrow[l, bend right=60]
+\\end{tikzcd}`;
+  const m = fromTikzcd(tex);
+  const left = m.arrows.find((a) => a.from.col === 0);
+  const right = m.arrows.find((a) => a.from.col === 1);
+  // bare bend left = 30deg -> mag = (30-10)/50 = 0.4, positive
+  assert.ok(Math.abs((left?.curve ?? 0) - 0.4) < 1e-9);
+  // bend right=60 -> mag = (60-10)/50 = 1.0, negative
+  assert.ok(Math.abs((right?.curve ?? 0) - (-1.0)) < 1e-9);
+});
+
+test("canExportToCD rejects a curved arrow", () => {
+  _resetIdCounter();
+  let m = createEmptyModel(1, 2);
+  m = setCellLabel(m, 0, 0, "A");
+  m = setCellLabel(m, 0, 1, "B");
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0.5 });
+  assert.match(canExportToCD(m)!, /curved/);
 });

@@ -18,6 +18,8 @@
  *                    it replaces the plain head, so it is emitted instead of
  *                    any head= option — a CD-style <-> arrow has neither two
  *                    heads nor a hook tail in our model, so there's no clash)
+ *   curve          → bend left=<deg> / bend right=<deg> (positive curve bulges
+ *                    left of travel; |curve| maps to 10–60°; 0 = no option)
  *   labelPosition  → default (left of travel = tikz-cd's auto side) or swap
  *
  * Direction letters are derived from the (dRow, dCol) offset between source and
@@ -94,6 +96,8 @@ function renderArrow(a: DiagramArrow): string {
   if (headOpt) opts.push(headOpt);
   const lineOpt = lineOption(a.lineStyle);
   if (lineOpt) opts.push(lineOpt);
+  const bendOpt = bendOption(a.curve);
+  if (bendOpt) opts.push(bendOpt);
   const labelPart = labelPartFor(a);
   if (labelPart) opts.push(labelPart);
   return `\\arrow[${opts.join(", ")}]`;
@@ -137,6 +141,22 @@ function lineOption(line: LineStyle | undefined): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * Map a signed curve ([-1,1], 0 = straight) to tikz-cd's `bend left=<deg>` /
+ * `bend right=<deg>`. tikz-cd's bend takes degrees (default 30); positive curve
+ * bulges left of travel → "bend left". We map |curve| to 10–60° so a small
+ * curve is still visibly bent and a full curve is strongly arced, then round
+ * to the nearest degree. Returns null for a straight arrow (curve 0 / unset),
+ * so straight arrows emit no bend option and stay minimal.
+ */
+function bendOption(curve: number | undefined): string | null {
+  if (typeof curve !== "number" || !Number.isFinite(curve) || curve === 0) return null;
+  const mag = Math.min(1, Math.abs(curve));
+  // 10° at the faint end, 60° at full; linear in the magnitude.
+  const deg = Math.round(10 + mag * 50);
+  return curve > 0 ? `bend left=${deg}` : `bend right=${deg}`;
 }
 
 /**

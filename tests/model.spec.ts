@@ -23,7 +23,7 @@ test("round-trip: cells and arrows preserve all fields", () => {
   let m = createEmptyModel(3, 3);
   m = setCellLabel(m, 0, 0, "A");
   m = setCellLabel(m, 1, 1, "B_{n}");
-  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 1, col: 1 }, label: "f", labelPosition: "above", head: "hook", lineStyle: "dashed", bidirectional: true });
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 1, col: 1 }, label: "f", labelPosition: "above", head: "hook", lineStyle: "dashed", bidirectional: true, curve: 0.35 });
   const back = roundTrip(m);
   assert.equal(back.rows, 3);
   assert.equal(back.cols, 3);
@@ -37,6 +37,36 @@ test("round-trip: cells and arrows preserve all fields", () => {
   assert.equal(a.head, "hook");
   assert.equal(a.lineStyle, "dashed");
   assert.equal(a.bidirectional, true);
+  assert.equal(a.curve, 0.35);
+});
+
+test("curve round-trips and a curve of 0 is dropped (sparse invariant)", () => {
+  _resetIdCounter();
+  let m = createEmptyModel(1, 2);
+  m = setCellLabel(m, 0, 0, "A");
+  m = setCellLabel(m, 0, 1, "B");
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: -0.7 });
+  // A curve of exactly 0 isn't stored — updateArrow drops it.
+  m = addArrow(m, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 }, curve: 0 });
+  const straight = m.arrows.find((a) => a.curve === undefined);
+  assert.ok(straight, "curve:0 arrow has no curve field in the live model");
+  const back = roundTrip(m);
+  const curved = back.arrows.find((a) => a.curve !== undefined);
+  assert.equal(curved?.curve, -0.7);
+  // serialize must not emit "curve": 0 for the straight arrow
+  const ser = serializeDiagram(m);
+  assert.doesNotMatch(ser, /"curve": 0/);
+});
+
+test("parseDiagram clamps an out-of-range curve", () => {
+  _resetIdCounter();
+  const src = `{
+    "version": 1, "rows": 1, "cols": 2,
+    "cells": [{ "row": 0, "col": 0, "label": "A" }, { "row": 0, "col": 1, "label": "B" }],
+    "arrows": [{ "id": "a1", "from": { "row": 0, "col": 0 }, "to": { "row": 0, "col": 1 }, "curve": 2.5 }]
+  }`;
+  const m = parseDiagram(src);
+  assert.equal(m.arrows[0].curve, 1);
 });
 
 test("serialize pretty-prints with 2-space indent", () => {

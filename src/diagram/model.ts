@@ -34,6 +34,15 @@ export interface DiagramArrow {
   lineStyle?: LineStyle;
   /** Renders as <-> (isomorphism / equivalence). */
   bidirectional?: boolean;
+  /**
+   * Signed curve amount in [-1, 1]: 0 (default) = straight shaft; the magnitude
+   * is how far the arc's apex deviates from the chord, as a fraction of the
+   * chord length; the sign picks which side it bulges (positive = left of the
+   * direction of travel, matching tikz-cd's "bend left"). Set by dragging the
+   * arrow's curve handle in the grid editor or via the Curve slider in the
+   * properties popover. Out-of-range values are clamped on parse.
+   */
+  curve?: number;
 }
 
 export interface DiagramModel {
@@ -48,6 +57,13 @@ export interface DiagramModel {
 /** Default arrow/cell option constants shared by editor + settings. */
 export const DEFAULT_HEAD: ArrowHead = "default";
 export const DEFAULT_LINE: LineStyle = "solid";
+
+/** Curve bounds (DiagramArrow.curve is clamped to [-1, 1]). Shared by the
+ *  editor's slider/handle and the tikz-cd bend mapping. */
+export const CURVE_MIN = -1;
+export const CURVE_MAX = 1;
+/** Apex offset of a fully-curved arrow, as a fraction of the chord length. */
+export const CURVE_APEX_FRAC = 0.28;
 
 let _idCounter = 0;
 /** Generate a locally-unique arrow id. Deterministic enough for tests to
@@ -278,7 +294,8 @@ function normalizeModel(raw: unknown): DiagramModel {
       arrow.lineStyle = line;
     }
     if (typeof ao.bidirectional === "boolean") arrow.bidirectional = ao.bidirectional;
-    arrows.push(arrow);
+    if (typeof ao.curve === "number") arrow.curve = ao.curve;
+    arrows.push(normalizeArrowCurve(arrow));
   }
 
   return { version, rows, cols, cells, arrows };
@@ -339,8 +356,29 @@ function byArrow(a: DiagramArrow, b: DiagramArrow): number {
 export function addArrow(model: DiagramModel, arrow: Omit<DiagramArrow, "id"> & { id?: string }): DiagramModel {
   const next = cloneModel(model);
   const id = arrow.id ?? nextArrowId();
-  next.arrows.push({ ...arrow, id });
+  next.arrows.push(normalizeArrowCurve({ ...arrow, id }));
   return next;
+}
+
+/**
+ * Clamp/drop an arrow's `curve` so the stored model stays sparse: a non-finite
+ * or zero curve is removed (0 = straight = the default), a finite nonzero value
+ * is clamped to [-1, 1]. Applied at every mutation entry point (addArrow,
+ * updateArrow) so `"curve": 0` never litters the serialized JSON.
+ */
+function normalizeArrowCurve<T extends DiagramArrow>(a: T): T {
+  if (a.curve === undefined || a.curve === null) {
+    if ("curve" in a) delete (a as DiagramArrow).curve;
+    return a;
+  }
+  if (!Number.isFinite(a.curve)) {
+    delete a.curve;
+    return a;
+  }
+  const c = Math.max(CURVE_MIN, Math.min(CURVE_MAX, a.curve));
+  if (c === 0) delete a.curve;
+  else a.curve = c;
+  return a;
 }
 
 /** Remove an arrow by id. */
@@ -354,6 +392,10 @@ export function removeArrow(model: DiagramModel, id: string): DiagramModel {
 export function updateArrow(model: DiagramModel, id: string, patch: Partial<DiagramArrow>): DiagramModel {
   const next = cloneModel(model);
   const idx = next.arrows.findIndex((a) => a.id === id);
-  if (idx >= 0) next.arrows[idx] = { ...next.arrows[idx], ...patch, id };
+  if (idx >= 0) {
+    // normalizeArrowCurve drops a curve of 0 (straight = default) so the stored
+    // model stays sparse — matches addArrow and the parse invariant.
+    next.arrows[idx] = normalizeArrowCurve({ ...next.arrows[idx], ...patch, id });
+  }
   return next;
 }

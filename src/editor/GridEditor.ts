@@ -27,6 +27,7 @@ import {
   addArrow, appendCol, appendRow, cloneModel, colDeletionIsDestructive,
   createEmptyModel, deleteCol, deleteRow, getLabel, insertCol, insertRow,
   removeArrow, rowDeletionIsDestructive, setCellLabel, trimTrailing, updateArrow,
+  CURVE_APEX_FRAC, CURVE_MAX, CURVE_MIN,
   type ArrowHead, type DiagramArrow, type DiagramModel, type LabelPosition, type LineStyle,
 } from "../diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "../diagram/render";
@@ -938,50 +939,76 @@ export class GridEditor {
     const x2 = end.x + ox;
     const y2 = end.y + oy;
 
+    // Curve (mirrors render.ts): a quadratic Bézier bulge, curve ∈ [-1,1],
+    // 0 = straight. Heads/tails attach along the tangent at each end.
+    const curve = this.clampedCurve(arrow.curve);
+    const chordLen = Math.hypot(x2 - x1, y2 - y1);
+    let ctrlX = 0;
+    let ctrlY = 0;
+    let startDirX = dx;
+    let startDirY = dy;
+    let endDirX = dx;
+    let endDirY = dy;
+    let apexX = (x1 + x2) / 2;
+    let apexY = (y1 + y2) / 2;
+    const isCurved = curve !== 0 && chordLen > 1e-9;
+    if (isCurved) {
+      const perpX = dy; // perpLeft(dx,dy); curve > 0 bulges left of travel
+      const perpY = -dx;
+      const apexOff = curve * chordLen * CURVE_APEX_FRAC;
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      ctrlX = mx + perpX * (2 * apexOff);
+      ctrlY = my + perpY * (2 * apexOff);
+      apexX = mx + perpX * apexOff;
+      apexY = my + perpY * apexOff;
+      const sd = unitOrFallback(ctrlX - x1, ctrlY - y1, dx, dy);
+      startDirX = sd.x; startDirY = sd.y;
+      const ed = unitOrFallback(x2 - ctrlX, y2 - ctrlY, dx, dy);
+      endDirX = ed.x; endDirY = ed.y;
+    }
+
     const g = this.doc.createElementNS("http://www.w3.org/2000/svg", "g");
     g.setAttribute("class", "cd-arrow");
     g.setAttribute("data-arrow-id", arrow.id);
     if (this.selectedArrowId === arrow.id) g.addClass("is-selected");
     g.style.cursor = "pointer";
 
-    // Shaft
-    const shaft = this.doc.createElementNS("http://www.w3.org/2000/svg", "line");
+    // Shaft (Bézier when curved, else a line).
+    const shaft = this.doc.createElementNS("http://www.w3.org/2000/svg", "path");
     shaft.setAttribute("class", "cd-arrow-path");
-    shaft.setAttribute("x1", String(x1));
-    shaft.setAttribute("y1", String(y1));
-    shaft.setAttribute("x2", String(x2));
-    shaft.setAttribute("y2", String(y2));
+    shaft.setAttribute(
+      "d",
+      isCurved
+        ? `M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}`
+        : `M ${x1} ${y1} L ${x2} ${y2}`,
+    );
     if (arrow.lineStyle === "dashed") shaft.setAttribute("stroke-dasharray", "5 3");
     if (arrow.lineStyle === "dotted") shaft.setAttribute("stroke-dasharray", "1 3");
     g.appendChild(shaft);
 
-    // Head (target end)
-    this.appendGridHead(g, x2, y2, dx, dy, arrow.head ?? "default");
+    // Head (target end, along the end tangent) / tail decoration (start tangent).
+    this.appendGridHead(g, x2, y2, endDirX, endDirY, arrow.head ?? "default");
     if (arrow.bidirectional) {
-      this.appendGridHead(g, x1, y1, -dx, -dy, arrow.head === "none" ? "default" : (arrow.head ?? "default"));
+      this.appendGridHead(g, x1, y1, -startDirX, -startDirY, arrow.head === "none" ? "default" : (arrow.head ?? "default"));
     } else if (arrow.head === "mapsto") {
-      this.appendGridMapstoBar(g, x1, y1, dx, dy);
+      this.appendGridMapstoBar(g, x1, y1, startDirX, startDirY);
     } else if (arrow.head === "hook") {
-      this.appendGridHook(g, x1, y1, dx, dy);
+      this.appendGridHook(g, x1, y1, startDirX, startDirY);
     }
 
-    // Invisible fat hit area for easy clicking.
-    const hit = this.doc.createElementNS("http://www.w3.org/2000/svg", "line");
+    // Invisible fat hit area for easy clicking (follows the curve).
+    const hit = this.doc.createElementNS("http://www.w3.org/2000/svg", "path");
     hit.setAttribute("class", "cd-arrow-hit");
-    hit.setAttribute("x1", String(x1));
-    hit.setAttribute("y1", String(y1));
-    hit.setAttribute("x2", String(x2));
-    hit.setAttribute("y2", String(y2));
+    hit.setAttribute("d", isCurved ? `M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}` : `M ${x1} ${y1} L ${x2} ${y2}`);
     g.appendChild(hit);
 
-    // Label
+    // Label at the curve's apex (the chord midpoint when straight).
     if (arrow.label && arrow.label.trim() !== "") {
       const labelHost = this.doc.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
-      const midX = (x1 + x2) / 2;
-      const midY = (y1 + y2) / 2;
       const nrm = this.labelNormal(arrow.labelPosition ?? "left", dx, dy);
-      labelHost.setAttribute("x", String(midX + nrm.x * 14 - 30));
-      labelHost.setAttribute("y", String(midY + nrm.y * 14 - 10));
+      labelHost.setAttribute("x", String(apexX + nrm.x * 14 - 30));
+      labelHost.setAttribute("y", String(apexY + nrm.y * 14 - 10));
       labelHost.setAttribute("width", "60");
       labelHost.setAttribute("height", "20");
       labelHost.style.overflow = "visible";
@@ -999,6 +1026,91 @@ export class GridEditor {
 
     g.addEventListener("click", (e: MouseEvent) => this.onArrowClick(arrow.id, e));
     svg.appendChild(g);
+
+    // Curve handle for the selected arrow: a draggable dot at the apex that
+    // sets `curve` by perpendicular drag (§improvement: adjust curve by dragging).
+    if (this.selectedArrowId === arrow.id) {
+      this.drawCurveHandle(svg, arrow, x1, y1, x2, y2, dx, dy, chordLen);
+    }
+  }
+
+  /** Clamp a curve value to [-1,1], treating NaN/undefined as 0 (straight). */
+  private clampedCurve(curve: number | undefined): number {
+    if (typeof curve !== "number" || !Number.isFinite(curve)) return 0;
+    return Math.max(CURVE_MIN, Math.min(CURVE_MAX, curve));
+  }
+
+  /**
+   * Draw the draggable curve handle for the selected arrow at its arc apex.
+   * Dragging perpendicular to the chord sets the arrow's `curve` (−1..1); the
+   * handle's screen position during the drag is the new apex, so it tracks the
+   * pointer 1:1. Releasing commits the curve (0 snaps back to straight/omitted).
+   */
+  private drawCurveHandle(
+    svg: SVGSVGElement,
+    arrow: DiagramArrow,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    dx: number,
+    dy: number,
+    chordLen: number,
+  ): void {
+    if (chordLen < 1e-9) return;
+    const curve = this.clampedCurve(arrow.curve);
+    const perpX = dy;
+    const perpY = -dx;
+    const apexOff = curve * chordLen * CURVE_APEX_FRAC;
+    const hx = (x1 + x2) / 2 + perpX * apexOff;
+    const hy = (y1 + y2) / 2 + perpY * apexOff;
+
+    const handle = this.doc.createElementNS("http://www.w3.org/2000/svg", "circle");
+    handle.setAttribute("class", "cd-curve-handle");
+    handle.setAttribute("cx", String(hx));
+    handle.setAttribute("cy", String(hy));
+    handle.setAttribute("r", "6");
+    handle.setAttribute("role", "slider");
+    handle.setAttribute("aria-label", "Curve amount");
+    handle.setAttribute("aria-valuemin", String(CURVE_MIN));
+    handle.setAttribute("aria-valuemax", String(CURVE_MAX));
+    handle.setAttribute("aria-valuenow", String(Math.round(curve * 100) / 100));
+    svg.appendChild(handle);
+
+    // Dragging the handle sets `curve` by perpendicular drag. Listeners are
+    // registered on `window` only when a drag STARTS (not on every redraw —
+    // patchArrow rebuilds the handle each move, so registering at draw time
+    // would leak a listener pair per move event) and removed when it ends.
+    handle.addEventListener("pointerdown", (e: PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      let dragging = true;
+      const onMove = (ev: PointerEvent) => {
+        if (!dragging) return;
+        ev.stopPropagation();
+        const gridRect = this.gridEl.getBoundingClientRect();
+        const px = ev.clientX - gridRect.left;
+        const py = ev.clientY - gridRect.top;
+        // Project the pointer onto the perpendicular axis through the chord
+        // midpoint; that signed distance, as a fraction of the apex range, is
+        // the new curve. The apex range for curve=±1 is ±chordLen*CURVE_APEX_FRAC.
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2;
+        const along = (px - mx) * perpX + (py - my) * perpY;
+        const c = Math.max(CURVE_MIN, Math.min(CURVE_MAX, along / (chordLen * CURVE_APEX_FRAC)));
+        // Skip the MathJax preview per-move; refresh once on release for smoothness.
+        this.patchArrow(arrow.id, { curve: c }, { preview: false });
+      };
+      const onUp = () => {
+        if (!dragging) return;
+        dragging = false;
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (this.showPreview) this.renderPreview();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
   }
 
   private appendGridHead(g: SVGGElement, tipX: number, tipY: number, dx: number, dy: number, head: ArrowHead): void {
@@ -1036,12 +1148,16 @@ export class GridEditor {
     const px = dy;
     const py = -dx;
     const h = 7;
+    const back = h * 0.9; // curl originates behind the tail so it reads as ↪, not a fork
+    const sx = x - dx * back + px * h;
+    const sy = y - dy * back + py * h;
+    const cx = x + px * h * 0.6;
+    const cy = y + py * h * 0.6;
+    const ex = x + dx * h;
+    const ey = y + dy * h;
     const p = this.doc.createElementNS("http://www.w3.org/2000/svg", "path");
     p.setAttribute("class", "cd-arrow-path");
-    p.setAttribute(
-      "d",
-      `M ${x + px * h} ${y + py * h} Q ${x + px * h + dx * h} ${y + py * h + dy * h} ${x + dx * h} ${y + dy * h}`,
-    );
+    p.setAttribute("d", `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`);
     g.appendChild(p);
   }
 
@@ -1201,6 +1317,46 @@ export class GridEditor {
     });
     pop.appendChild(biRow);
 
+    // Curve slider (−1..1): a precise alternative to dragging the on-arrow
+    // curve handle. 0 = straight; + bulges left of travel, − right (matching
+    // tikz-cd's bend left/right). A "Straighten" button resets it to 0.
+    const curveRow = this.doc.createElement("div");
+    curveRow.className = "cd-prop-row cd-curve-row";
+    const curveLabel = this.doc.createElement("span");
+    curveLabel.textContent = "Curve";
+    const curveSlider = this.doc.createElement("input");
+    curveSlider.type = "range";
+    curveSlider.min = String(CURVE_MIN);
+    curveSlider.max = String(CURVE_MAX);
+    curveSlider.step = "0.05";
+    const initialCurve = this.clampedCurve(arrow.curve);
+    curveSlider.value = String(initialCurve);
+    curveSlider.setAttribute("aria-label", "Curve amount");
+    const curveValue = this.doc.createElement("span");
+    curveValue.className = "cd-curve-value";
+    curveValue.textContent = fmtCurve(initialCurve);
+    curveSlider.addEventListener("input", () => {
+      const c = this.clampedCurve(Number(curveSlider.value));
+      curveValue.textContent = fmtCurve(c);
+      this.patchArrow(arrowId, { curve: c });
+    });
+    curveRow.appendChild(curveLabel);
+    curveRow.appendChild(curveSlider);
+    curveRow.appendChild(curveValue);
+    pop.appendChild(curveRow);
+
+    const straightenBtn = this.doc.createElement("button");
+    straightenBtn.type = "button";
+    straightenBtn.textContent = "Straighten";
+    straightenBtn.className = "cd-curve-straighten";
+    straightenBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      curveSlider.value = "0";
+      curveValue.textContent = fmtCurve(0);
+      this.patchArrow(arrowId, { curve: 0 });
+    });
+    pop.appendChild(straightenBtn);
+
     // Delete
     const delBtn = this.doc.createElement("button");
     delBtn.type = "button";
@@ -1294,10 +1450,13 @@ export class GridEditor {
     window.addEventListener("pointerup", onUp);
   }
 
-  private patchArrow(id: string, patch: Partial<DiagramArrow>): void {
+  private patchArrow(id: string, patch: Partial<DiagramArrow>, opts?: { preview?: boolean }): void {
     this.model = updateArrow(this.model, id, patch);
     this.renderGridArrows();
-    if (this.showPreview) this.renderPreview();
+    // The MathJax preview is expensive; callers that fire many rapid patches
+    // (e.g. dragging the curve handle) pass preview:false and refresh once on
+    // release, so the drag stays responsive.
+    if (this.showPreview && opts?.preview !== false) this.renderPreview();
   }
 
   // -------------------------------------------------------------------------
@@ -1399,6 +1558,10 @@ export class GridEditor {
         e.stopPropagation();
         this.closeProperties();
         this.selectedArrowId = null;
+        // Clear the in-grid selection highlight + curve handle, which otherwise
+        // linger until the next model change (the handle in particular is a
+        // prominent dot that shouldn't outlive the selection).
+        this.renderGridArrows();
         return;
       }
       e.stopPropagation();
@@ -1481,4 +1644,19 @@ function clipToBox(
   const ty = Math.abs(dy) < 1e-9 ? Infinity : hh / Math.abs(dy);
   const t = Math.min(tx, ty);
   return { x: cx + dx * t, y: cy + dy * t };
+}
+
+/** Unit vector along (x,y), falling back to (fx,fy) when (x,y) is ~zero
+ *  (degenerate Bézier tangent guard). Mirrors render.ts. */
+function unitOrFallback(x: number, y: number, fx: number, fy: number): { x: number; y: number } {
+  const len = Math.hypot(x, y);
+  if (len < 1e-9) return { x: fx, y: fy };
+  return { x: x / len, y: y / len };
+}
+
+/** Format a curve value for the properties popover: "straight", or ±n%. */
+function fmtCurve(c: number): string {
+  if (Math.abs(c) < 1e-9) return "straight";
+  const pct = Math.round(c * 100);
+  return `${pct > 0 ? "+" : ""}${pct}%`;
 }

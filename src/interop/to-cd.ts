@@ -58,6 +58,9 @@ export function canExportToCD(model: DiagramModel): string | null {
     if (a.bidirectional) {
       return "bidirectional arrows are not expressible in AMS CD — export as tikz-cd instead";
     }
+    if (typeof a.curve === "number" && a.curve !== 0) {
+      return "curved arrows are not expressible in AMS CD — export as tikz-cd instead";
+    }
     if (a.lineStyle && a.lineStyle !== "solid") {
       return `${a.lineStyle} arrows are not expressible in AMS CD — export as tikz-cd instead`;
     }

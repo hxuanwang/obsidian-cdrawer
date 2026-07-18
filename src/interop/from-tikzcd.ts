@@ -60,6 +60,7 @@ export function fromTikzcd(source: string): DiagramModel {
           head: spec.head,
           lineStyle: spec.lineStyle,
           bidirectional: spec.bidirectional,
+          curve: spec.curve,
         });
       }
     }
@@ -82,6 +83,7 @@ export function fromTikzcd(source: string): DiagramModel {
       head: a.head,
       lineStyle: a.lineStyle,
       bidirectional: a.bidirectional,
+      curve: a.curve,
     });
   }
   return m;
@@ -95,6 +97,7 @@ interface ParsedTikzArrow {
   head?: ArrowHead;
   lineStyle?: LineStyle;
   bidirectional?: boolean;
+  curve?: number;
 }
 
 /** Strip the `\begin{tikzcd}[…]` … `\end{tikzcd}` wrapper. */
@@ -147,6 +150,7 @@ interface ArrowSpec {
   head?: ArrowHead;
   lineStyle?: LineStyle;
   bidirectional?: boolean;
+  curve?: number;
 }
 
 interface ParsedCell {
@@ -294,9 +298,26 @@ function parseOptionList(inside: string): ArrowSpec {
       case "dotted":
         spec.lineStyle = "dotted";
         break;
-      default:
-        // Unknown option (bend, color, phantom, …) — ignored per §9 scope.
+      default: {
+        // bend left[=N] / bend right[=N] → signed curve. tikz-cd defaults to
+        // 30° when no angle is given. We invert the to-tikzcd mapping
+        // (|curve| → 10–60°): curve = (deg-10)/50, clamped to [-1,1], signed by
+        // the bend direction (bend left = positive = bulge left of travel).
+        // The ANGLE round-trips exactly for the integer degrees to-tikzcd emits
+        // (10–60°); a model→tex→model round-trip of an arbitrary curve is lossy
+        // by up to one degree's worth (e.g. curve 0.35 → 28° → 0.36) because
+        // tikz-cd's bend takes integer degrees — acceptable for the §9 brief,
+        // which requires real-fixture round-trips, not continuous-curve fidelity.
+        const bend = /^(bend\s+(left|right))(?:\s*=\s*(-?\d+(?:\.\d+)?))?$/.exec(t);
+        if (bend) {
+          const deg = bend[3] !== undefined ? parseFloat(bend[3]) : 30;
+          const mag = Math.max(0, Math.min(1, (Math.abs(deg) - 10) / 50));
+          spec.curve = bend[2] === "left" ? mag : -mag;
+        } else {
+          // Unknown option (color, phantom, out=, in=, …) — ignored per §9 scope.
+        }
         break;
+      }
     }
   }
   // A label with no explicit position keyword is left as `undefined` — the
