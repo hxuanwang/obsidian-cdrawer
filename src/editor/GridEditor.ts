@@ -80,14 +80,19 @@ export class GridEditor {
   private previewEl: HTMLDivElement;
   private propertiesEl: HTMLDivElement | null = null;
   /**
-   * User-set position for the arrow properties popover, when they've dragged
-   * it off the default corner. Cleared in closeProperties so a freshly opened
-   * panel starts at the default position again.
+   * User-set viewport position for the arrow properties popover, when they've
+   * dragged it off the default corner. Viewport (not overlay-relative) coords,
+   * because the popover is mounted in document.body and can float outside the
+   * editor window (improvement #3). Cleared in closeProperties so a freshly
+   * opened panel starts at the default position again.
    */
   private propertiesOffset: { left: number; top: number } | null = null;
   /** A chrome popover (Import/Export), anchored to its trigger button. Only one
    *  is open at a time; toggling its trigger closes the other. */
   private chromePopover: HTMLDivElement | null = null;
+  /** Undo / Redo chrome buttons (refreshed via refreshHistoryButtons). */
+  private undoBtn: HTMLButtonElement | null = null;
+  private redoBtn: HTMLButtonElement | null = null;
 
   private model: DiagramModel;
   private selectedArrowId: string | null = null;
@@ -95,6 +100,15 @@ export class GridEditor {
   /** The gridcell that currently holds roving-tabindex focus (§7.3 a11y). */
   private focusedCell: { row: number; col: number } | null = null;
   private previewTimer: number | null = null;
+
+  /** Undo/redo history of committed model states (improvement #1). `past`
+   *  holds states older than the current `model`; `future` holds states newer
+   *  than it (populated by undo, cleared by any new edit). `model` itself is
+   *  always the current, visible state — history stores one entry per logical
+   *  change, so dragging the curve handle (many patches) is one entry. */
+  private past: DiagramModel[] = [];
+  private future: DiagramModel[] = [];
+  private static readonly MAX_HISTORY = 100;
   /** Render-generation guard: only the latest renderPreview call appends its
    *  SVG, so two overlapping async renders can't both draw (which produced a
    *  doubled preview when committing a cell and then drawing an arrow fired
@@ -111,6 +125,9 @@ export class GridEditor {
     this.onCommit = opts.onCommit;
     this.onDiscard = opts.onDiscard;
     this.model = cloneModel(opts.model);
+    // The initial model is the baseline: there's nothing to undo back past it.
+    this.past = [];
+    this.future = [];
     this.anchor = opts.anchor;
     this.defaultHead = opts.defaultHead ?? "default";
     this.defaultLineStyle = opts.defaultLineStyle ?? "solid";
@@ -132,16 +149,24 @@ export class GridEditor {
   /** Mount the overlay and focus it. */
   mount(): void {
     this.buildChrome();
-    this.root.appendChild(this.gridEl);
+    // The root is the positioning/resize shell (no overflow, so the negative-
+    // offset resize handles render outside its box). Scrollable content lives in
+    // an inner wrapper — otherwise overflow:auto on the root would clip the
+    // handles and the shadows of body-mounted popovers.
+    const body = this.doc.createElement("div");
+    body.className = "cd-editor-body";
+    body.appendChild(this.gridEl);
     if (this.showPreview) {
       const previewWrap = this.doc.createElement("div");
       previewWrap.className = "cd-editor-preview-wrap";
       previewWrap.appendChild(this.previewEl);
-      this.root.appendChild(previewWrap);
+      body.appendChild(previewWrap);
     }
+    this.root.appendChild(body);
     this.doc.body.appendChild(this.root);
 
     this.position();
+    this.attachResizeHandles();
     this.renderGrid();
     if (this.showPreview) this.renderPreview();
 
@@ -157,6 +182,9 @@ export class GridEditor {
     // (including a cell input → another cell input; §7.4).
     this.doc.addEventListener("pointerdown", this.boundOutsidePointer, true);
     this.doc.addEventListener("keydown", this.boundKeyDown, true);
+
+    // Reflect the empty initial history in the Undo/Redo buttons.
+    this.refreshHistoryButtons();
   }
 
   /** Detach the overlay and remove all listeners. Safe to call once. */
@@ -165,6 +193,9 @@ export class GridEditor {
     this.closed = true;
     this.cancelPreviewDebounce();
     this.closeChromePopover();
+    // The properties popover is mounted in document.body (so it can be dragged
+    // outside the editor); remove it explicitly since root.remove() won't.
+    this.closeProperties();
     this.doc.removeEventListener("pointerdown", this.boundOutsidePointer, true);
     this.doc.removeEventListener("keydown", this.boundKeyDown, true);
     this.root.remove();
@@ -188,6 +219,35 @@ export class GridEditor {
 
     const actions = this.doc.createElement("div");
     actions.className = "cd-editor-actions";
+
+    // Undo / redo (improvement #1): step the model history. Ctrl/Cmd+Z and
+    // Ctrl/Cmd+Shift+Z (or Ctrl+Y) are the keyboard equivalents (onKeyDown).
+    // Both are disabled when their stack is empty; the disabled state is
+    // refreshed via refreshHistoryButtons() after every change.
+    const undoBtn = this.doc.createElement("button");
+    undoBtn.type = "button";
+    undoBtn.textContent = "Undo";
+    undoBtn.className = "cd-editor-chrome-btn cd-editor-undo";
+    undoBtn.title = "Undo (Ctrl/Cmd+Z)";
+    undoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.undo();
+    });
+    actions.appendChild(undoBtn);
+
+    const redoBtn = this.doc.createElement("button");
+    redoBtn.type = "button";
+    redoBtn.textContent = "Redo";
+    redoBtn.className = "cd-editor-chrome-btn cd-editor-redo";
+    redoBtn.title = "Redo (Ctrl/Cmd+Shift+Z)";
+    redoBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.redo();
+    });
+    actions.appendChild(redoBtn);
+
+    this.undoBtn = undoBtn;
+    this.redoBtn = redoBtn;
 
     // Import (§9): paste a tikz-cd or AMS CD block to replace the draft.
     const importBtn = this.doc.createElement("button");
@@ -258,6 +318,87 @@ export class GridEditor {
       if (!dragging) return;
       dragging = false;
       handle.removeClass("is-dragging");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  /**
+   * Attach resize handles to the four edges and four corners of the editor
+   * overlay (improvement #2). Dragging an edge adjusts width OR height; a
+   * corner adjusts both. The overlay is position:fixed, so resizing is a direct
+   * mutation of root.style.width/height (and left/top when dragging a
+   * top/left-anchored handle, so the opposite edge stays put). Uses fixed pixel
+   * sizes rather than vw/vh once the user starts resizing, so the overlay stops
+   * tracking the viewport and stays the size they set.
+   */
+  private attachResizeHandles(): void {
+    const MIN_W = 320;
+    const MIN_H = 200;
+    const edges: { dir: string; cursor: string }[] = [
+      { dir: "n", cursor: "ns-resize" },
+      { dir: "s", cursor: "ns-resize" },
+      { dir: "e", cursor: "ew-resize" },
+      { dir: "w", cursor: "ew-resize" },
+      { dir: "ne", cursor: "nesw-resize" },
+      { dir: "nw", cursor: "nwse-resize" },
+      { dir: "se", cursor: "nwse-resize" },
+      { dir: "sw", cursor: "nesw-resize" },
+    ];
+    for (const edge of edges) {
+      const handle = this.doc.createElement("div");
+      handle.className = `cd-resize-handle cd-resize-${edge.dir}`;
+      handle.style.cursor = edge.cursor;
+      handle.addEventListener("pointerdown", (e) => this.beginResize(e, edge.dir, MIN_W, MIN_H));
+      this.root.appendChild(handle);
+    }
+  }
+
+  /** Begin a resize drag for the given edge/corner direction. */
+  private beginResize(e: PointerEvent, dir: string, minW: number, minH: number): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const rect = this.root.getBoundingClientRect();
+
+    // Pin the current size/position in pixels so subsequent style writes are
+    // absolute (independent of the viewport-relative defaults in styles.css).
+    this.root.style.width = `${rect.width}px`;
+    this.root.style.height = `${rect.height}px`;
+    this.root.style.left = `${rect.left}px`;
+    this.root.style.top = `${rect.top}px`;
+
+    const n = dir.includes("n");
+    const s = dir.includes("s");
+    const w = dir.includes("w");
+    const east = dir.includes("e");
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      let width = rect.width;
+      let height = rect.height;
+      let left = rect.left;
+      let top = rect.top;
+      if (east) width = Math.max(minW, rect.width + dx);
+      if (s) height = Math.max(minH, rect.height + dy);
+      if (w) {
+        width = Math.max(minW, rect.width - dx);
+        left = rect.left + (rect.width - width);
+      }
+      if (n) {
+        height = Math.max(minH, rect.height - dy);
+        top = rect.top + (rect.height - height);
+      }
+      this.root.style.width = `${width}px`;
+      this.root.style.height = `${height}px`;
+      this.root.style.left = `${left}px`;
+      this.root.style.top = `${top}px`;
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -358,7 +499,7 @@ export class GridEditor {
             status.textContent = "Nothing recognizable — check the format.";
             return;
           }
-          this.model = model;
+          this.commitModel(model);
           this.selectedArrowId = null;
           this.closeProperties();
           this.closeChromePopover();
@@ -466,11 +607,11 @@ export class GridEditor {
 
     // Add-row / add-column controls.
     const addRow = this.makeAddButton("cd-add-row", "+ row", () => {
-      this.model = appendRow(this.model);
+      this.commitModel(appendRow(this.model));
       this.rerenderAll();
     });
     const addCol = this.makeAddButton("cd-add-col", "+ col", () => {
-      this.model = appendCol(this.model);
+      this.commitModel(appendCol(this.model));
       this.rerenderAll();
     });
     this.gridEl.appendChild(addRow);
@@ -590,7 +731,7 @@ export class GridEditor {
       if (this.model.rows <= MIN_DIM) break;
       if (rowDeletionIsDestructive(this.model, r)) continue;
       const btn = this.makeRemoveButton("cd-row-remove", "–", () => {
-        this.model = deleteRow(this.model, r);
+        this.commitModel(deleteRow(this.model, r));
         this.rerenderAll();
       });
       // position at the left edge of the row's first cell
@@ -604,7 +745,7 @@ export class GridEditor {
       if (this.model.cols <= MIN_DIM) break;
       if (colDeletionIsDestructive(this.model, c)) continue;
       const btn = this.makeRemoveButton("cd-col-remove", "–", () => {
-        this.model = deleteCol(this.model, c);
+        this.commitModel(deleteCol(this.model, c));
         this.rerenderAll();
       });
       btn.addClass("cd-col-header");
@@ -695,7 +836,7 @@ export class GridEditor {
     this.editingCell = null;
     this.cancelPreviewDebounce();
 
-    this.model = setCellLabel(this.model, row, col, value);
+    this.commitModel(setCellLabel(this.model, row, col, value));
     // Keep keyboard focus on the just-edited cell after the grid rebuilds.
     this.focusedCell = { row, col };
     this.rerenderAll();
@@ -827,12 +968,12 @@ export class GridEditor {
       const target = this.cellAtPoint(ev.clientX, ev.clientY);
       if (!target) return;
       if (target.row === row && target.col === col) return; // no self-arrow
-      this.model = addArrow(this.model, {
+      this.commitModel(addArrow(this.model, {
         from: { row, col },
         to: { row: target.row, col: target.col },
         head: this.defaultHead,
         lineStyle: this.defaultLineStyle,
-      });
+      }));
       this.rerenderAll();
     };
 
@@ -1214,6 +1355,12 @@ export class GridEditor {
   private onArrowClick(arrowId: string, e: MouseEvent): void {
     e.stopPropagation();
     if (this.editingCell) this.commitCellEdit();
+    // If the user is clicking a DIFFERENT arrow than the one whose panel is
+    // open, drop the previous drag offset so the new panel opens at the default
+    // corner rather than inheriting the old arrow's dragged position. Keep the
+    // offset when re-selecting the same arrow (the rerenderAll that follows
+    // preserves the user's placement).
+    if (this.selectedArrowId !== arrowId) this.propertiesOffset = null;
     this.selectedArrowId = arrowId;
     this.openProperties(arrowId);
   }
@@ -1228,14 +1375,32 @@ export class GridEditor {
     this.propertiesEl = pop;
 
     // Draggable header (§improvement): grab the panel by its title bar to move
-    // it anywhere over the overlay. The drag remembers an offset that survives
-    // the rerenderAll() that fires on every field change, so editing a field
+    // it anywhere — including outside the editor overlay (improvement #3). The
+    // panel is mounted to document.body, so it can float over the whole window.
+    // The drag remembers a viewport-relative offset that survives the
+    // rerenderAll() that fires on every field change, so editing a field
     // doesn't snap the panel back to its default corner.
     const header = this.doc.createElement("div");
     header.className = "cd-properties-header";
     const headerTitle = this.doc.createElement("span");
+    headerTitle.className = "cd-properties-title";
     headerTitle.textContent = "Arrow";
     header.appendChild(headerTitle);
+    // Close button (improvement #4): dismisses the popover without touching the
+    // selection-derived data. We keep selectedArrowId cleared so the in-grid
+    // highlight + curve handle leave with it.
+    const closeBtn = this.doc.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "cd-properties-close";
+    closeBtn.setAttribute("aria-label", "Close arrow settings");
+    closeBtn.textContent = "×";
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.selectedArrowId = null;
+      this.closeProperties();
+      this.renderGridArrows();
+    });
+    header.appendChild(closeBtn);
     pop.appendChild(header);
     this.makePropertiesDraggable(header, pop);
 
@@ -1361,32 +1526,39 @@ export class GridEditor {
     delBtn.textContent = "Delete arrow";
     delBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this.model = removeArrow(this.model, arrowId);
+      this.commitModel(removeArrow(this.model, arrowId));
       this.selectedArrowId = null;
       this.closeProperties();
       this.rerenderAll();
     });
     pop.appendChild(delBtn);
 
-    this.root.appendChild(pop);
+    // Mount to document.body (not the overlay root) so the panel can be dragged
+    // outside the editor window (improvement #3). It's position:fixed, so its
+    // left/top are viewport coordinates, independent of the overlay.
+    this.doc.body.appendChild(pop);
     this.positionProperties();
   }
 
   private positionProperties(): void {
     if (!this.propertiesEl) return;
-    const rootRect = this.root.getBoundingClientRect();
     const popRect = this.propertiesEl.getBoundingClientRect();
+    const vw = this.doc.defaultView?.innerWidth ?? window.innerWidth;
+    const vh = this.doc.defaultView?.innerHeight ?? window.innerHeight;
     // If the user has dragged the panel, keep it where they put it (clamped to
-    // stay inside the overlay); otherwise default to the bottom-right corner.
+    // stay on screen — at least one header-width visible so it can be grabbed
+    // again). Otherwise default it to the bottom-right corner of the editor
+    // overlay, so it appears near the diagram on first open.
     if (this.propertiesOffset) {
-      const left = Math.max(0, Math.min(this.propertiesOffset.left, rootRect.width - popRect.width));
-      const top = Math.max(0, Math.min(this.propertiesOffset.top, rootRect.height - popRect.height));
+      const left = clampViewport(this.propertiesOffset.left, popRect.width, vw);
+      const top = clampViewport(this.propertiesOffset.top, popRect.height, vh);
       this.propertiesEl.style.left = `${left}px`;
       this.propertiesEl.style.top = `${top}px`;
       return;
     }
-    const left = Math.max(8, rootRect.width - popRect.width - 12);
-    const top = rootRect.height - popRect.height - 12;
+    const rootRect = this.root.getBoundingClientRect();
+    const left = clampViewport(rootRect.right - popRect.width - 12, popRect.width, vw);
+    const top = clampViewport(rootRect.bottom - popRect.height - 12, popRect.height, vh);
     this.propertiesEl.style.left = `${left}px`;
     this.propertiesEl.style.top = `${top}px`;
   }
@@ -1394,13 +1566,18 @@ export class GridEditor {
   private closeProperties(): void {
     this.propertiesEl?.remove();
     this.propertiesEl = null;
+    // Clear the remembered drag offset so the next-opened panel starts at the
+    // default corner rather than wherever the last one was dragged.
     this.propertiesOffset = null;
   }
 
   /**
-   * Make `handle` drag `panel` (both within the overlay root). On drag, record
-   * the panel's left/top so positionProperties() preserves it across rerenders.
-   * Clamped to keep the panel inside the overlay.
+   * Make `handle` drag `panel` anywhere on screen (improvement #3). The panel
+   * lives in document.body and is position:fixed, so dragging sets viewport
+   * left/top directly. The pointer is clamped to keep at least a header-strip
+   * of the panel on screen (so it can never be dragged entirely off-window and
+   * lost). The final position is recorded in `propertiesOffset` so a
+   * rerenderAll() (fired on every field edit) preserves it.
    */
   private makePropertiesDraggable(handle: HTMLElement, panel: HTMLElement): void {
     handle.addClass("cd-drag-handle");
@@ -1411,15 +1588,14 @@ export class GridEditor {
     let originTop = 0;
 
     handle.addEventListener("pointerdown", (e) => {
-      // Don't start a drag from interactive controls (none here, but guard).
+      // Don't start a drag from the close button or other interactive controls.
       if (e.target instanceof HTMLElement && e.target.closest("button,input,select,label")) return;
       dragging = true;
       startX = e.clientX;
       startY = e.clientY;
       const rect = panel.getBoundingClientRect();
-      const rootRect = this.root.getBoundingClientRect();
-      originLeft = rect.left - rootRect.left;
-      originTop = rect.top - rootRect.top;
+      originLeft = rect.left;
+      originTop = rect.top;
       handle.addClass("is-dragging");
       e.preventDefault();
       e.stopPropagation();
@@ -1427,13 +1603,13 @@ export class GridEditor {
 
     const onMove = (e: PointerEvent) => {
       if (!dragging) return;
-      const rootRect = this.root.getBoundingClientRect();
       const popRect = panel.getBoundingClientRect();
+      const vw = this.doc.defaultView?.innerWidth ?? window.innerWidth;
+      const vh = this.doc.defaultView?.innerHeight ?? window.innerHeight;
       let left = originLeft + (e.clientX - startX);
       let top = originTop + (e.clientY - startY);
-      // Clamp so the panel stays (mostly) inside the overlay.
-      left = Math.max(0, Math.min(left, rootRect.width - popRect.width));
-      top = Math.max(0, Math.min(top, rootRect.height - popRect.height));
+      left = clampViewport(left, popRect.width, vw);
+      top = clampViewport(top, popRect.height, vh);
       panel.style.left = `${left}px`;
       panel.style.top = `${top}px`;
       this.propertiesOffset = { left, top };
@@ -1449,12 +1625,77 @@ export class GridEditor {
   }
 
   private patchArrow(id: string, patch: Partial<DiagramArrow>, opts?: { preview?: boolean }): void {
-    this.model = updateArrow(this.model, id, patch);
+    this.commitModel(updateArrow(this.model, id, patch));
     this.renderGridArrows();
     // The MathJax preview is expensive; callers that fire many rapid patches
     // (e.g. dragging the curve handle) pass preview:false and refresh once on
     // release, so the drag stays responsive.
     if (this.showPreview && opts?.preview !== false) this.renderPreview();
+  }
+
+  // -------------------------------------------------------------------------
+  // Undo / redo (improvement #1)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Adopt `next` as the current model, pushing the previous model onto the undo
+   * stack and clearing the redo stack. Skips the history entry (but still sets
+   * the model) when `next` is structurally identical to the current model, so a
+   * no-op patch (e.g. setting a field to its existing value) doesn't pollute the
+   * stack. Every model mutation that should be undoable goes through here.
+   */
+  private commitModel(next: DiagramModel): void {
+    if (modelsEqual(this.model, next)) {
+      this.model = next;
+      return;
+    }
+    this.past.push(this.model);
+    if (this.past.length > GridEditor.MAX_HISTORY) this.past.shift();
+    this.future = [];
+    this.model = next;
+    this.refreshHistoryButtons();
+  }
+
+  /** Enable/disable the Undo/Redo buttons to match the current stacks. */
+  private refreshHistoryButtons(): void {
+    if (this.undoBtn) this.undoBtn.disabled = this.past.length === 0;
+    if (this.redoBtn) this.redoBtn.disabled = this.future.length === 0;
+  }
+
+  /** Undo the last committed change; no-op if there's nothing to undo. */
+  private undo(): void {
+    if (this.past.length === 0) return;
+    this.future.push(this.model);
+    this.model = this.past.pop()!;
+    this.afterHistoryRestore();
+  }
+
+  /** Redo a previously undone change; no-op if there's nothing to redo. */
+  private redo(): void {
+    if (this.future.length === 0) return;
+    this.past.push(this.model);
+    this.model = this.future.pop()!;
+    this.afterHistoryRestore();
+  }
+
+  /** Refresh the grid + preview after an undo/redo, keeping the properties
+   *  popover open if the selected arrow still exists. */
+  private afterHistoryRestore(): void {
+    // If a cell was mid-edit, drop the input — its underlying label may have
+    // changed underneath it; reopening from the restored state is cleanest.
+    if (this.editingCell) {
+      this.editingCell = null;
+      this.cancelPreviewDebounce();
+    }
+    this.renderGrid();
+    if (this.showPreview) this.renderPreview();
+    if (this.selectedArrowId && this.model.arrows.some((a) => a.id === this.selectedArrowId)) {
+      this.openProperties(this.selectedArrowId);
+    } else {
+      this.selectedArrowId = null;
+      this.closeProperties();
+    }
+    this.refreshHistoryButtons();
   }
 
   // -------------------------------------------------------------------------
@@ -1498,8 +1739,12 @@ export class GridEditor {
   private rerenderAll(): void {
     this.renderGrid();
     if (this.showPreview) this.renderPreview();
-    // Re-open properties if an arrow is still selected and still exists.
+    // Re-open properties if an arrow is still selected and still exists. The
+    // previous panel is removed first so openProperties rebuilds it from the
+    // post-change model (its field handlers captured the *old* arrow, and a
+    // patch can change the selected arrow's own properties).
     if (this.selectedArrowId && this.model.arrows.some((a) => a.id === this.selectedArrowId)) {
+      this.closeProperties();
       this.openProperties(this.selectedArrowId);
     } else {
       this.selectedArrowId = null;
@@ -1520,6 +1765,10 @@ export class GridEditor {
 
   private onOutsidePointer(e: PointerEvent): void {
     if (this.closed) return;
+    // The arrow-properties popover is mounted in document.body (so it can be
+    // dragged outside the editor window); a press on it is "inside" and must
+    // NOT commit, just like a press on the overlay itself.
+    if (this.propertiesEl?.contains(e.target as Node)) return;
     if (this.root.contains(e.target as Node)) {
       // Inside the overlay: if a chrome popover is open and the press isn't on
       // it (or its trigger button), close the popover so it doesn't dangle over
@@ -1537,6 +1786,22 @@ export class GridEditor {
 
   private onKeyDown(e: KeyboardEvent): void {
     if (this.closed) return;
+    // Undo / redo (improvement #1). Capture-phase keydown on the document, so
+    // this works whether a cell, the grid, or the properties panel has focus.
+    // Skip while a cell label is being edited (the input owns text-editing
+    // shortcuts — and undoing mid-keystroke would yank the field's value).
+    const isUndo = (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "z" && !e.shiftKey;
+    const isRedo =
+      (e.ctrlKey || e.metaKey) && !e.altKey &&
+      ((e.key.toLowerCase() === "z" && e.shiftKey) || e.key.toLowerCase() === "y");
+    if (isUndo || isRedo) {
+      if (this.editingCell) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (isUndo) this.undo();
+      else this.redo();
+      return;
+    }
     if (e.key === "Escape") {
       // If a chrome popover (Import/Export) is open, Escape closes just that.
       if (this.chromePopover) {
@@ -1619,8 +1884,57 @@ export { insertRow, insertCol };
 
 // Module-level geometry helpers for the in-grid arrow rendering.
 
+/**
+ * Structural equality for two models, used by commitModel to skip no-op
+ * history entries. A normalized serialize-then-string compare would also work,
+ * but this deep comparison is cheaper (no JSON round-trip) and tolerant of
+ * incidental key ordering. Arrow ids are compared too — a changed id is a real
+ * change (it happens on import, which replaces the model).
+ */
+function modelsEqual(a: DiagramModel, b: DiagramModel): boolean {
+  if (a === b) return true;
+  if (a.rows !== b.rows || a.cols !== b.cols) return false;
+  if (a.cells.length !== b.cells.length) return false;
+  if (a.arrows.length !== b.arrows.length) return false;
+  for (let i = 0; i < a.cells.length; i++) {
+    const ac = a.cells[i];
+    const bc = b.cells[i];
+    if (ac.row !== bc.row || ac.col !== bc.col || ac.label !== bc.label) return false;
+  }
+  for (let i = 0; i < a.arrows.length; i++) {
+    const aa = a.arrows[i];
+    const ba = b.arrows[i];
+    if (
+      aa.id !== ba.id ||
+      aa.from.row !== ba.from.row || aa.from.col !== ba.from.col ||
+      aa.to.row !== ba.to.row || aa.to.col !== ba.to.col ||
+      (aa.label ?? "") !== (ba.label ?? "") ||
+      (aa.labelPosition ?? null) !== (ba.labelPosition ?? null) ||
+      (aa.head ?? null) !== (ba.head ?? null) ||
+      (aa.lineStyle ?? null) !== (ba.lineStyle ?? null) ||
+      aa.bidirectional === true !== ba.bidirectional === true ||
+      (aa.curve ?? null) !== (ba.curve ?? null)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function comparePos(a: { row: number; col: number }, b: { row: number; col: number }): number {
   return a.row - b.row || a.col - b.col;
+}
+
+/**
+ * Clamp a viewport position for a fixed panel of `size` px within a viewport of
+ * `viewport` px, keeping at least 40px of the panel visible on each axis (so a
+ * dragged popover can peek outside the editor but can never be lost off-screen).
+ */
+function clampViewport(pos: number, size: number, viewport: number): number {
+  const keep = 40;
+  const min = keep - size; // allow up to (size - 40)px off the left/top
+  const max = viewport - keep; // keep at least 40px visible on the right/bottom
+  return Math.max(min, Math.min(pos, max));
 }
 
 function pairKey(a: { row: number; col: number }, b: { row: number; col: number }): string {

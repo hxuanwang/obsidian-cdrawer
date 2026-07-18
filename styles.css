@@ -51,11 +51,22 @@
   font-size: var(--font-ui-small);
   color: var(--text-normal);
   /* Wide enough to be a comfortable editing surface: ~90% of the viewport,
-     capped so it never touches the window edges. §7.3. */
+     capped so it never touches the window edges. §7.3. No overflow here — the
+     resize handles sit outside the box (negative offsets) and would be clipped
+     by overflow:auto. Scrolling lives on the inner body. */
   width: min(900px, 90vw);
   max-width: 95vw;
   max-height: 90vh;
+  overflow: visible;
+}
+
+/* Scrollable inner content (chrome + grid + preview). */
+.cd-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   overflow: auto;
+  min-height: 0;
 }
 
 .cd-editor-chrome {
@@ -255,8 +266,8 @@
 }
 
 .cd-properties {
-  position: absolute;
-  z-index: 1001;
+  position: fixed;
+  z-index: 1002;
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
@@ -285,6 +296,26 @@
 
 .cd-properties-header:active {
   cursor: grabbing;
+}
+
+/* Close button on the arrow-properties header (improvement #4). */
+.cd-properties-close {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cd-properties-close:hover {
+  color: var(--text-error);
+  background: var(--background-modifier-error);
 }
 
 .cd-properties label {
@@ -602,5 +633,55 @@
    pointer-free interaction. */
 .cd-cell[tabindex="0"]:not(.is-focused) {
   box-shadow: 0 0 0 1px var(--interactive-accent-hover);
+}
+
+/* --- Improvements: resize handles, disabled chrome buttons --- */
+
+/* Resize handles on the editor overlay (improvement #2). Eight handles: four
+   edges + four corners, positioned around the overlay's box. They're invisible
+   until hovered/focused so they don't clutter the surface, but the corner handles
+   sit a touch larger so they're easy to grab. pointer-events:none on the handles
+   themselves would defeat the purpose — they stay hit-testable. */
+.cd-resize-handle {
+  position: absolute;
+  z-index: 1001;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.cd-resize-n { top: -4px; left: 8px; right: 8px; height: 8px; }
+.cd-resize-s { bottom: -4px; left: 8px; right: 8px; height: 8px; }
+.cd-resize-e { right: -4px; top: 8px; bottom: 8px; width: 8px; }
+.cd-resize-w { left: -4px; top: 8px; bottom: 8px; width: 8px; }
+
+.cd-resize-ne { top: -4px; right: -4px; width: 14px; height: 14px; }
+.cd-resize-nw { top: -4px; left: -4px; width: 14px; height: 14px; }
+.cd-resize-se { bottom: -4px; right: -4px; width: 14px; height: 14px; }
+.cd-resize-sw { bottom: -4px; left: -4px; width: 14px; height: 14px; }
+
+/* A faint guide line on the resizeable edges while hovered, so the affordance
+   is discoverable. Corner handles get a small dot. */
+.cd-resize-handle:hover {
+  background: var(--interactive-accent);
+  opacity: 0.35;
+}
+
+.cd-resize-ne:hover,
+.cd-resize-nw:hover,
+.cd-resize-se:hover,
+.cd-resize-sw:hover {
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
+/* Disabled chrome buttons (Undo/Redo when their stack is empty). */
+.cd-editor-chrome-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cd-editor-chrome-btn:disabled:hover {
+  color: var(--text-normal);
+  border-color: var(--background-modifier-border);
 }
 
