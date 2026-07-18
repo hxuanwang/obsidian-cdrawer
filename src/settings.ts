@@ -16,6 +16,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CommutativeDiagramPlugin from "./main";
 import { DEFAULT_HEAD, DEFAULT_LINE, type ArrowHead, type LineStyle } from "./diagram/model";
+import type { EditorMode } from "./editor/GridEditor";
 
 export interface CDSettings {
   /** Default rows for a fresh diagram. */
@@ -38,6 +39,13 @@ export interface CDSettings {
    * a more compact editor.
    */
   showPreview: boolean;
+  /**
+   * Initial presentation mode for the grid editor (feature #1):
+   *   - "float"    : a draggable, resizable window (the original behavior).
+   *   - "embedded" : the grid sits de-chromed in the page, not a popup.
+   * The user can still switch live via the mode toggle in the editor chrome.
+   */
+  editorMode: EditorMode;
 }
 
 export const DEFAULT_SETTINGS: CDSettings = {
@@ -47,6 +55,7 @@ export const DEFAULT_SETTINGS: CDSettings = {
   defaultLineStyle: DEFAULT_LINE,
   clickToEdit: false,
   showPreview: true,
+  editorMode: "float",
 };
 
 const HEADS: { value: ArrowHead; label: string }[] = [
@@ -154,6 +163,24 @@ export class CDSettingTab extends PluginSettingTab {
         t.setValue(this.plugin.settings.showPreview);
         t.onChange(async (v) => {
           this.plugin.settings.showPreview = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Editor mode")
+      .setDesc(
+        "How the grid editor first opens. Floating window: a draggable, " +
+          "resizable popup. Embedded: the grid sits de-chromed in the page, " +
+          "without a window border. You can still switch modes with the toggle " +
+          "in the editor's top bar.",
+      )
+      .addDropdown((dd) => {
+        dd.addOption("float", "Floating window");
+        dd.addOption("embedded", "Embedded in page");
+        dd.setValue(this.plugin.settings.editorMode);
+        dd.onChange(async (v) => {
+          this.plugin.settings.editorMode = v as EditorMode;
           await this.plugin.saveSettings();
         });
       });

@@ -69,6 +69,28 @@
   min-height: 0;
 }
 
+/* Embedded mode (feature #1): de-chrome the overlay so the grid reads as part
+   of the page rather than a popup window. Drop the border, shadow, rounded
+   corners, and the viewport-relative max-size caps. Width is set in JS to match
+   the diagram's full-width wrapper (the reading column), so the grid aligns
+   with the page; height is content-driven. The grid surface itself keeps its
+   recessed panel so cells stay legible. */
+.cd-editor-overlay.cd-editor-embedded {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 4px;
+  max-width: 98vw;
+  max-height: none;
+}
+
+/* For a fresh insert (no diagram to track), embedded mode has no JS width set,
+   so fall back to the reading-column width the host would have used. */
+.cd-editor-overlay.cd-editor-embedded:not([style*="width"]) {
+  width: min(700px, 92vw);
+}
+
 .cd-editor-chrome {
   display: flex;
   align-items: center;
@@ -248,8 +270,15 @@
   cursor: pointer;
 }
 
+/* Selected arrow (feature #2): a clear accent-color highlight on the whole
+   arrow — shaft, head, and any tail decoration (hook/mapsto) all carry
+   .cd-arrow-path, so this one rule highlights the entire arrow, not just the
+   shaft. Applies in both the in-grid view and the live preview (both attach
+   .cd-arrow + .is-selected). The thicker stroke makes the selection obvious at
+   a glance even among overlapping parallel arrows. */
 .cd-arrow.is-selected .cd-arrow-path {
   stroke: var(--interactive-accent);
+  stroke-width: 2;
 }
 
 .cd-arrow-hit {
@@ -683,5 +712,28 @@
 .cd-editor-chrome-btn:disabled:hover {
   color: var(--text-normal);
   border-color: var(--background-modifier-border);
+}
+
+/* Icon-only chrome button (the mode toggle, feature #1): square, centered
+   glyph, same border weight as the text buttons so the row stays uniform. */
+.cd-editor-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  padding: 2px 5px;
+  line-height: 0;
+}
+
+.cd-editor-icon-btn svg {
+  display: block;
+}
+
+/* The static diagram SVG hidden while its embedded editor is open over it
+   (feature #1: embedded mode tracks the diagram's spot). Hidden via visibility
+   rather than display:none so its box (which the editor follows) is preserved. */
+.cd-embedded-hidden {
+  visibility: hidden;
 }
 

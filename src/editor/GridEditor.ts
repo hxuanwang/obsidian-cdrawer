@@ -36,6 +36,17 @@ import { fromTikzcd } from "../interop/from-tikzcd";
 import { toCD, canExportToCD } from "../interop/to-cd";
 import { fromCD } from "../interop/from-cd";
 
+/** The editor's presentation mode (feature #1).
+ *  - "float"    : a draggable, resizable window with border/shadow/title chrome,
+ *                 floating over the note at a fixed viewport position.
+ *  - "embedded" : de-chromed (no window border/shadow/rounding; transparent
+ *                 background) AND tracking the diagram's element so it scrolls
+ *                 with the page — the grid reads as part of the note rather than
+ *                 a popup. Requires a `followTarget` (the existing diagram's
+ *                 SVG); a fresh insert has no diagram to track, so embedded
+ *                 there de-chromes but stays fixed at the cursor. */
+export type EditorMode = "float" | "embedded";
+
 export interface GridEditorOptions {
   /** Document to mount into (the active leaf's document). */
   document: Document;
@@ -55,6 +66,15 @@ export interface GridEditorOptions {
   defaultLineStyle?: LineStyle;
   /** Whether to show the live draft-preview pane beneath the grid (§8.3). */
   showPreview?: boolean;
+  /** Initial presentation mode (feature #1); defaults to "float". The user can
+   *  switch live via the mode toggle icon in the chrome. */
+  mode?: EditorMode;
+  /** The existing diagram's SVG to track in embedded mode (feature #1): the
+   *  de-chromed editor follows this element on scroll, so it stays glued to the
+   *  diagram's spot in the page. The SVG is hidden while the editor is embedded
+   *  over it and restored on close / switch-to-float. Omit for a fresh insert
+   *  (nothing to track → embedded de-chromes but stays fixed at the cursor). */
+  followTarget?: SVGElement;
 }
 
 const HEADS: ArrowHead[] = ["default", "epi", "hook", "mapsto", "none"];
@@ -65,6 +85,26 @@ const PREVIEW_DEBOUNCE_MS = 250;
 /** Minimum grid size we'll let the user shrink to via row/col delete. */
 const MIN_DIM = 1;
 
+/**
+ * Inline SVG icons for the mode toggle (feature #1). Each is the icon for the
+ * mode you'll switch *to*: the "dock into page" glyph when floating (click → go
+ * embedded), the "pop out window" glyph when embedded (click → go float). 16×16,
+ * currentColor so it tracks the theme.
+ */
+const ICON_EMBEDDED =
+  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+  `<rect x="1.5" y="1.5" width="13" height="13" rx="2"/>` +
+  `<path d="M4 8h8"/>` +
+  `<path d="M8 4v8"/>` +
+  `</svg>`;
+const ICON_FLOAT =
+  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+  `<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/>` +
+  `<path d="M2.5 6.5h11"/>` +
+  `<circle cx="4.4" cy="5" r="0.4" fill="currentColor" stroke="none"/>` +
+  `<circle cx="6" cy="5" r="0.4" fill="currentColor" stroke="none"/>` +
+  `</svg>`;
+
 export class GridEditor {
   private readonly doc: Document;
   private readonly anchor: { x: number; y: number };
@@ -74,6 +114,26 @@ export class GridEditor {
   private readonly renderLabel: LabelRenderer;
   private readonly onCommit: (model: DiagramModel | null) => void;
   private readonly onDiscard: () => void;
+
+  /** Current presentation mode (feature #1); switchable at runtime. */
+  private mode: EditorMode;
+  /** The diagram SVG embedded mode tracks (feature #1): the de-chromed editor
+   *  follows it on scroll so it stays at the diagram's spot in the page. Hidden
+   *  while embedded, restored on close / switch-to-float. Null for a fresh
+   *  insert (nothing to track). */
+  private readonly followTarget: SVGElement | null;
+  /** The wrapper around `followTarget` (e.g. `.cd-diagram-wrap`) — a full-width
+   *  block whose box spans the reading column. Embedded mode follows THIS (not
+   *  the narrow SVG) so the editor's width aligns with the page, and hides it so
+   *  the static diagram + its edit button don't show through. */
+  private followHost: HTMLElement | null = null;
+  /** The rAF id of the scroll-follow loop (embedded mode), cleared on unmode. */
+  private followRaf = 0;
+  /** Observes the grid's box so the in-grid arrows re-render when it resizes
+   *  (feature #2: arrows follow the resize) — covers resize-drag, window
+   *  resize, and any other layout change. rAF-throttled to coalesce callbacks. */
+  private resizeObserver: ResizeObserver | null = null;
+  private arrowRerenderRaf = 0;
 
   private root: HTMLDivElement;
   private gridEl: HTMLDivElement;
@@ -93,6 +153,8 @@ export class GridEditor {
   /** Undo / Redo chrome buttons (refreshed via refreshHistoryButtons). */
   private undoBtn: HTMLButtonElement | null = null;
   private redoBtn: HTMLButtonElement | null = null;
+  /** Mode toggle button (float ⇄ embedded), feature #1. */
+  private modeBtn: HTMLButtonElement | null = null;
 
   private model: DiagramModel;
   private selectedArrowId: string | null = null;
@@ -132,9 +194,12 @@ export class GridEditor {
     this.defaultHead = opts.defaultHead ?? "default";
     this.defaultLineStyle = opts.defaultLineStyle ?? "solid";
     this.showPreview = opts.showPreview !== false;
+    this.mode = opts.mode ?? "float";
+    this.followTarget = opts.followTarget ?? null;
 
     this.root = this.doc.createElement("div");
     this.root.className = "cd-editor-overlay";
+    this.applyModeClass();
     this.gridEl = this.doc.createElement("div");
     this.gridEl.className = "cd-editor-grid";
     this.gridEl.setAttribute("role", "grid");
@@ -166,9 +231,13 @@ export class GridEditor {
     this.doc.body.appendChild(this.root);
 
     this.position();
-    this.attachResizeHandles();
+    // Resize handles are a float-window affordance; skip them when the editor
+    // opens in embedded mode (toggleMode re-adds them if the user switches).
+    if (this.mode === "float") this.attachResizeHandles();
+    if (this.mode === "embedded") this.startFollow();
     this.renderGrid();
     if (this.showPreview) this.renderPreview();
+    this.attachResizeObserver();
 
     // §7.3 a11y: seed roving focus on the top-left cell so keyboard users land
     // somewhere meaningful on open (don't steal focus from a cell input that
@@ -192,6 +261,8 @@ export class GridEditor {
     if (this.closed) return;
     this.closed = true;
     this.cancelPreviewDebounce();
+    this.stopFollow();
+    this.detachResizeObserver();
     this.closeChromePopover();
     // The properties popover is mounted in document.body (so it can be dragged
     // outside the editor); remove it explicitly since root.remove() won't.
@@ -248,6 +319,20 @@ export class GridEditor {
 
     this.undoBtn = undoBtn;
     this.redoBtn = redoBtn;
+
+    // Mode toggle (feature #1): an icon button that switches between the
+    // floating window and the de-chromed, scroll-following embedded view. The
+    // icon shown is the mode you'll switch TO (so it reads as "go there").
+    const modeBtn = this.doc.createElement("button");
+    modeBtn.type = "button";
+    modeBtn.className = "cd-editor-chrome-btn cd-editor-mode cd-editor-icon-btn";
+    modeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleMode();
+    });
+    actions.appendChild(modeBtn);
+    this.modeBtn = modeBtn;
+    this.refreshModeIcon();
 
     // Import (§9): paste a tikz-cd or AMS CD block to replace the draft.
     const importBtn = this.doc.createElement("button");
@@ -409,6 +494,156 @@ export class GridEditor {
     const { left, top } = placeNear(this.anchor.x, this.anchor.y, rect.width, rect.height);
     this.root.style.left = `${left}px`;
     this.root.style.top = `${top}px`;
+  }
+
+  /** Toggle between the float-window and embedded (de-chromed, scroll-following)
+   *  presentation (feature #1). Embedded mode tracks the diagram's element so
+   *  the grid scrolls with the page; float mode is a fixed popup. */
+  private toggleMode(): void {
+    this.mode = this.mode === "float" ? "embedded" : "float";
+    this.applyModeClass();
+    // Clear any pixel sizing/position pinned by a previous resize/follow so the
+    // new mode's CSS sizing takes effect cleanly.
+    this.root.style.width = "";
+    this.root.style.height = "";
+    // Resize handles are float-window only; scroll-follow is embedded only.
+    if (this.mode === "float") {
+      this.stopFollow();
+      this.attachResizeHandles();
+      this.position();
+    } else {
+      this.removeResizeHandles();
+      this.startFollow();
+    }
+    // A mode change can shift the grid's box; re-measure arrows + preview.
+    this.renderGridArrows();
+    if (this.showPreview) this.renderPreview();
+    this.refreshModeIcon();
+  }
+
+  /** Update the mode toggle icon + tooltip to reflect the current mode. */
+  private refreshModeIcon(): void {
+    if (!this.modeBtn) return;
+    this.modeBtn.innerHTML =
+      this.mode === "float" ? ICON_EMBEDDED : ICON_FLOAT;
+    this.modeBtn.title =
+      this.mode === "float"
+        ? "Switch to embedded view (grid sits in the page, scrolls with it)"
+        : "Switch to floating window";
+    this.modeBtn.setAttribute(
+      "aria-label",
+      this.mode === "float" ? "Embedded view" : "Floating window",
+    );
+  }
+
+  /** Apply (or clear) the embedded-mode class on the root. Idempotent. */
+  private applyModeClass(): void {
+    if (this.mode === "embedded") this.root.addClass("cd-editor-embedded");
+    else this.root.removeClass("cd-editor-embedded");
+  }
+
+  /** Remove all resize handles (used when switching to embedded mode). */
+  private removeResizeHandles(): void {
+    const handles = this.root.querySelectorAll<HTMLElement>(".cd-resize-handle");
+    for (const h of Array.from(handles)) h.remove();
+  }
+
+  /**
+   * Watch the grid's box and re-render the in-grid arrows whenever it changes
+   * (feature #2: arrows follow the resize). Arrow endpoints are computed from
+   * each cell's `getBoundingClientRect`, so they go stale whenever a resize
+   * (drag handle, window/pane resize, mode switch, viewport zoom) changes cell
+   * sizes — without this, the shafts keep their old pixel positions while the
+   * cells move. Callbacks are rAF-throttled to coalesce a burst of resize
+   * events into one redraw.
+   */
+  private attachResizeObserver(): void {
+    this.detachResizeObserver();
+    const RO = this.doc.defaultView?.ResizeObserver;
+    if (!RO) return;
+    this.resizeObserver = new RO(() => {
+      if (this.closed) return;
+      if (this.arrowRerenderRaf) return; // already scheduled
+      this.arrowRerenderRaf = this.doc.defaultView?.requestAnimationFrame(() => {
+        this.arrowRerenderRaf = 0;
+        if (this.closed) return;
+        this.renderGridArrows();
+      }) ?? 0;
+    });
+    this.resizeObserver.observe(this.gridEl);
+  }
+
+  private detachResizeObserver(): void {
+    if (this.arrowRerenderRaf) {
+      this.doc.defaultView?.cancelAnimationFrame(this.arrowRerenderRaf);
+      this.arrowRerenderRaf = 0;
+    }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+  }
+
+  // -------------------------------------------------------------------------
+  // Embedded scroll-follow (feature #1)
+  //
+  // In embedded mode the de-chromed editor tracks the existing diagram's SVG:
+  // a rAF loop reads its viewport rect each frame and pins the editor's
+  // left/top/width to it, so the grid scrolls with the page exactly where the
+  // diagram was. The static SVG is hidden while embedded so the two don't
+  // overlap, and restored when we leave embedded mode or close.
+  // -------------------------------------------------------------------------
+
+  /** Begin tracking the diagram (embedded mode). The editor follows the SVG's
+   *  full-width wrapper so its width aligns with the page column; no-op without
+   *  a target. */
+  private startFollow(): void {
+    this.stopFollow();
+    if (!this.followTarget) return;
+    // The wrapper (`.cd-diagram-wrap` / `.cd-lp-wrap`) is a full-width block —
+    // the reading column — so following it aligns the editor to the page. The
+    // SVG itself is only as wide as its content, far narrower than the column.
+    this.followHost = this.followTarget.closest<HTMLElement>(".cd-diagram-wrap, .cd-lp-wrap")
+      ?? this.followTarget.parentElement;
+    const hideTarget = this.followHost ?? this.followTarget;
+    hideTarget.addClass("cd-embedded-hidden");
+    this.followRaf = this.doc.defaultView?.requestAnimationFrame(() => this.followLoop()) ?? 0;
+  }
+
+  /** rAF body: position the editor over the target, then schedule the next. */
+  private followLoop(): void {
+    if (this.closed || this.mode !== "embedded" || !this.followTarget) return;
+    this.updateFollowPosition();
+    this.followRaf = this.doc.defaultView?.requestAnimationFrame(() => this.followLoop()) ?? 0;
+  }
+
+  /** Snap the editor's fixed position + width to the tracked element's rect. */
+  private updateFollowPosition(): void {
+    const target = this.followHost ?? this.followTarget;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    // Position: update every frame so the editor tracks the diagram on scroll.
+    this.root.style.left = `${rect.left}px`;
+    this.root.style.top = `${rect.top}px`;
+    // Width: the host spans the reading column — aligning the editor to it
+    // makes the embedded grid match the page width. Only rewrite when it
+    // actually changes (e.g. window/pane resize) to avoid per-frame thrash;
+    // re-render the in-grid arrows then so the shafts track the new column.
+    const w = Math.max(rect.width, 0);
+    const cur = parseFloat(this.root.style.width);
+    if (!Number.isFinite(cur) || Math.abs(cur - w) > 0.5) {
+      this.root.style.width = `${w}px`;
+      this.renderGridArrows();
+    }
+  }
+
+  /** Stop tracking and reveal the static diagram again (switch-to-float / close). */
+  private stopFollow(): void {
+    if (this.followRaf) {
+      this.doc.defaultView?.cancelAnimationFrame(this.followRaf);
+      this.followRaf = 0;
+    }
+    const hideTarget = this.followHost ?? this.followTarget;
+    hideTarget?.removeClass("cd-embedded-hidden");
+    this.followHost = null;
   }
 
   // -------------------------------------------------------------------------
@@ -1361,8 +1596,14 @@ export class GridEditor {
     // offset when re-selecting the same arrow (the rerenderAll that follows
     // preserves the user's placement).
     if (this.selectedArrowId !== arrowId) this.propertiesOffset = null;
+    const prevSelected = this.selectedArrowId;
     this.selectedArrowId = arrowId;
     this.openProperties(arrowId);
+    // Redraw the in-grid arrows so the selection highlight + curve handle move
+    // to the newly clicked arrow (a click alone changes no model state, so
+    // renderGridArrows wouldn't otherwise fire). Only needed when the selection
+    // actually changed.
+    if (prevSelected !== arrowId) this.renderGridArrows();
   }
 
   private openProperties(arrowId: string): void {
@@ -1722,12 +1963,15 @@ export class GridEditor {
     }
   }
 
-  /** Make arrows in the preview clickable to open the properties popover. */
+  /** Make arrows in the preview clickable to open the properties popover, and
+   *  mark the currently-selected one (feature #2: highlight the selected arrow
+   *  in the preview as well as the in-grid view). */
   private wirePreviewArrows(svg: SVGElement): void {
     const groups = Array.from(svg.querySelectorAll<SVGGElement>("g.cd-arrow"));
     for (const g of groups) {
       const id = g.getAttribute("data-arrow-id");
       if (!id) continue;
+      if (this.selectedArrowId === id) g.addClass("is-selected");
       g.addEventListener("click", (e: MouseEvent) => this.onArrowClick(id, e));
     }
   }

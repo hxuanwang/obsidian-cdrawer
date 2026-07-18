@@ -62,7 +62,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
     this.registerEditorExtension(cdLivePreviewExtension({
       renderLabel: makeLabelRenderer(activeWindow().document),
       getClickToEdit: () => this.settings.clickToEdit,
-      onEdit: (view, block, model) => this.onEditLivePreview(view, block, model),
+      onEdit: (view, block, model, svg) => this.onEditLivePreview(view, block, model, svg),
     }));
 
     // --- Phase 4: settings tab (§8.3) ---
@@ -173,6 +173,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
+      mode: this.settings.editorMode,
       onCommit: (model: DiagramModel | null) => {
         activeEditor = null;
         if (!model) return; // empty draft → write nothing (§7.4)
@@ -393,6 +394,9 @@ export default class CommutativeDiagramPlugin extends Plugin {
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
+      mode: this.settings.editorMode,
+      // The diagram this editor reopens; embedded mode tracks it on scroll.
+      followTarget: svg ?? undefined,
       onCommit: async (committed: DiagramModel | null) => {
         activeEditor = null;
         await this.writeBlock(sourcePath, section, committed);
@@ -418,6 +422,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
     view: EditorView,
     block: { start: number; end: number },
     model: DiagramModel,
+    svg: SVGElement,
   ): void {
     if (Platform.isMobileApp) {
       new Notice("Editing commutative diagrams is desktop-only for now.");
@@ -442,6 +447,9 @@ export default class CommutativeDiagramPlugin extends Plugin {
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
+      mode: this.settings.editorMode,
+      // The Live-Preview widget's SVG; embedded mode tracks it on scroll.
+      followTarget: svg,
       onCommit: (committed: DiagramModel | null) => {
         activeEditor = null;
         this.commitLivePreview(view, from, to, committed);

@@ -59,9 +59,10 @@ export interface LivePreviewOptions {
   /**
    * Called when the user clicks a rendered diagram. The host opens the
    * floating grid editor prefilled with `model` and, on commit, rewrites the
-   * block's text range via a CM6 transaction.
+   * block's text range via a CM6 transaction. `svg` is the rendered diagram the
+   * user clicked — passed so embedded mode can track it (feature #1).
    */
-  onEdit: (view: EditorView, block: CdBlock, model: DiagramModel) => void;
+  onEdit: (view: EditorView, block: CdBlock, model: DiagramModel, svg: SVGElement) => void;
 }
 
 /**
@@ -243,7 +244,7 @@ class CdWidget extends WidgetType {
       wrap.appendChild(svg);
       // §8.3: shared click-vs-hover-to-edit affordance (same as Reading view).
       attachEditAffordance(wrap, svg, this.opts.getClickToEdit(), () => {
-        this.opts.onEdit(view, this.block, model);
+        if (svg) this.opts.onEdit(view, this.block, model, svg);
       });
     }
   }
