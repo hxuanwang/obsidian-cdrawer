@@ -8,6 +8,10 @@ LaTeX labels, drag to draw arrows), and click away to commit. The note gets a
 `$$\begin{CD}…\end{CD}$$` — so a reader can't tell which mechanism produced it.
 Click the rendered diagram later to reopen the same grid editor, pre-filled.
 
+The editor has two modes: a **floating window** (draggable, resizable) or
+**embedded** in the page, where the grid sits in the document flow and scrolls
+with the note.
+
 Diagrams are stored as a `cd` fenced code block containing a small JSON model, so
 they live in plain text in your vault, diff cleanly, and survive sync/undo. You
 can also **export to [tikz-cd](https://ctan.org/pkg/tikz-cd)** or plain AMS `CD`
@@ -16,6 +20,18 @@ for use in a paper, and **import** either back into an editable diagram.
 > **Status:** v1.0. Display (rendering existing diagrams) works on desktop and
 > mobile. The grid **editor** is desktop-only for now — see
 > [Mobile](#mobile).
+
+> **Recently added**
+> - Two editor modes: a **floating window** (draggable, resizable) and
+>   **embedded** in the page (Reading view — the grid sits in the document flow
+>   and scrolls with the note, no overlap). Switchable live from the top bar.
+> - **Undo / redo** (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`).
+> - **Selected arrow is highlighted** in the accent color, in both the grid and
+>   the live preview.
+> - The arrow-settings popover can be **dragged outside the editor window** and
+>   closed with its own **×** button.
+> - **+row / +col** buttons reveal on hovering near the grid's bottom / right
+>   edge instead of being always visible.
 
 ---
 
@@ -51,8 +67,14 @@ Insert (ribbon / command palette / right-click)  ──►  Floating grid editor
                                                   click  ──►  reopen the editor
 ```
 
-- **Edit mode** — a transient floating grid overlay (not a Modal) anchored at the
-  cursor. Exists only while open.
+- **Edit mode** — a grid editor (not a Modal) that opens in one of two
+  presentations, switchable live from its top bar:
+  - **Floating window** — a draggable, resizable overlay anchored at the cursor.
+  - **Embedded** — in Reading view, the grid is mounted *inside* the diagram's
+    spot in the document flow, so the page text reflows around it and it scrolls
+    with the note (no overlap). In Live Preview it de-chromes but stays a popup,
+    since that view's DOM is managed by CodeMirror and can't host an in-flow
+    editor reliably.
 - **Display mode** — a static SVG that lives permanently in the note, rendered to
   match native `CD` blocks in font size, arrow weight, and spacing, in any theme.
 
@@ -76,15 +98,26 @@ Then in the grid:
   MathJax preview appears as you type.
 - **Drag from one cell to another** to draw an arrow. (A press that releases in
   place just edits the label, so the two gestures don't fight.)
-- **Click an arrow** to open its properties popover: label, label position
-  (left/right/above/below), head style, line style, bidirectional toggle, curve,
-  delete. **Curve an arrow** either by dragging the small handle that appears at
-  its midpoint when selected (drag perpendicular to the shaft) or with the
-  Curve slider in the popover; + bulges left of the arrow's travel, − right (and
-  a "Straighten" button resets it).
-- **+ row / + col** add rows/columns; hover a row or column header for a small
-  **–** to remove it (destructive removes — those that would delete a label or
-  arrow endpoint — are hidden, so you can't nuke content by accident).
+- **Click an arrow** to select it — it highlights in the accent color (in both
+  the grid and the live preview) — and open its properties popover: label, label
+  position (left/right/above/below), head style, line style, bidirectional
+  toggle, curve, delete. **Curve an arrow** either by dragging the small handle
+  that appears at its midpoint when selected (drag perpendicular to the shaft)
+  or with the Curve slider in the popover; + bulges left of the arrow's travel,
+  − right (and a "Straighten" button resets it). The popover has its own close
+  button and can be dragged anywhere, including outside the editor window.
+- **Undo / redo** any edit with the **Undo** / **Redo** buttons in the top bar,
+  or `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` (`Ctrl+Y` also redoes).
+- **Switch editor mode** with the small window icon in the top bar — float
+  ↔ embedded.
+- **Resize the window** by dragging any edge or corner (float mode only); the
+  in-grid arrows follow the resize.
+- **+ row / + col** add rows/columns. The `+ row` button sits below the grid and
+  `+ col` to its right; both are hidden until you move the pointer near the
+  corresponding edge, so the editing surface stays clean. Hover a row or column
+  header for a small **–** to remove it (destructive removes — those that would
+  delete a label or arrow endpoint — are hidden, so you can't nuke content by
+  accident).
 - **Commit** by clicking outside the overlay or pressing **Escape**. The only way
   to **discard** is the explicit **Discard** button — a stray Escape never loses
   work. An entirely empty draft commits nothing (no empty block is written).
@@ -213,6 +246,9 @@ upgrade path from notes that already use native `CD`.
 - **Click to edit diagrams** — on: click anywhere on a rendered diagram to edit;
   off (default): an Edit button appears on hover.
 - **Show editor preview** — toggle the live rendered preview beneath the grid.
+- **Editor mode** — how the editor first opens: **Floating window** (default) or
+  **Embedded in page**. You can still switch modes live from the editor's top
+  bar.
 
 ---
 
