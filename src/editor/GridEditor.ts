@@ -91,19 +91,47 @@ const MIN_DIM = 1;
  * embedded), the "pop out window" glyph when embedded (click → go float). 16×16,
  * currentColor so it tracks the theme.
  */
-const ICON_EMBEDDED =
-  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-  `<rect x="1.5" y="1.5" width="13" height="13" rx="2"/>` +
-  `<path d="M4 8h8"/>` +
-  `<path d="M8 4v8"/>` +
-  `</svg>`;
-const ICON_FLOAT =
-  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
-  `<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/>` +
-  `<path d="M2.5 6.5h11"/>` +
-  `<circle cx="4.4" cy="5" r="0.4" fill="currentColor" stroke="none"/>` +
-  `<circle cx="6" cy="5" r="0.4" fill="currentColor" stroke="none"/>` +
-  `</svg>`;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Build a 16×16 stroke icon <svg> via DOM APIs (not an innerHTML string, which
+ *  the Obsidian lint rule forbids). `children` are [tag, attrs] tuples. */
+function buildIcon(doc: Document, children: [string, Record<string, string>][]): SVGSVGElement {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.4");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  for (const [tag, attrs] of children) {
+    const el = doc.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    svg.appendChild(el);
+  }
+  return svg;
+}
+
+/** The "switch to embedded" icon: a grid square with a plus (rows + cols). */
+function iconEmbedded(doc: Document): SVGSVGElement {
+  return buildIcon(doc, [
+    ["rect", { x: "1.5", y: "1.5", width: "13", height: "13", rx: "2" }],
+    ["path", { d: "M4 8h8" }],
+    ["path", { d: "M8 4v8" }],
+  ]);
+}
+
+/** The "switch to float" icon: a window with a title bar and two dots. */
+function iconFloat(doc: Document): SVGSVGElement {
+  return buildIcon(doc, [
+    ["rect", { x: "2.5", y: "3.5", width: "11", height: "9", rx: "1.5" }],
+    ["path", { d: "M2.5 6.5h11" }],
+    ["circle", { cx: "4.4", cy: "5", r: "0.4", fill: "currentColor", stroke: "none" }],
+    ["circle", { cx: "6", cy: "5", r: "0.4", fill: "currentColor", stroke: "none" }],
+  ]);
+}
 
 export class GridEditor {
   private readonly doc: Document;
@@ -505,9 +533,9 @@ export class GridEditor {
     this.mode = this.mode === "float" ? "embedded" : "float";
     this.applyModeClass();
     // Clear any pixel sizing/position pinned by a previous resize so the new
-    // mode's CSS sizing takes effect cleanly.
-    this.root.style.width = "";
-    this.root.style.height = "";
+    // mode's CSS sizing takes effect cleanly. (setCssStyles with "" clears the
+    // inline property — the lint rule forbids direct .style assignments.)
+    this.root.setCssStyles({ width: "", height: "" });
     // Resize handles are float-window only; in-flow embedding is embedded only.
     if (this.mode === "float") {
       this.stopEmbed();
@@ -526,8 +554,12 @@ export class GridEditor {
   /** Update the mode toggle icon + tooltip to reflect the current mode. */
   private refreshModeIcon(): void {
     if (!this.modeBtn) return;
-    this.modeBtn.innerHTML =
-      this.mode === "float" ? ICON_EMBEDDED : ICON_FLOAT;
+    // Replace the icon by clearing + appending a fresh <svg> (built via DOM
+    // APIs, not an innerHTML string — the Obsidian lint rule forbids the latter).
+    this.modeBtn.empty();
+    this.modeBtn.appendChild(
+      this.mode === "float" ? iconEmbedded(this.doc) : iconFloat(this.doc),
+    );
     this.modeBtn.title =
       this.mode === "float"
         ? "Switch to embedded view (grid sits in the page, scrolls with it)"
@@ -646,12 +678,10 @@ export class GridEditor {
     for (const el of this.embedHidden) el.addClass("cd-embedded-hidden");
     // Move the editor root into the wrapper (in-flow). Clear the fixed
     // positioning + pixel sizing so it participates in the page layout.
+    // (setCssStyles with "" clears each inline property — the lint rule forbids
+    // direct .style assignments.)
     this.root.addClass("cd-editor-inflow");
-    this.root.style.position = "";
-    this.root.style.left = "";
-    this.root.style.top = "";
-    this.root.style.width = "";
-    this.root.style.height = "";
+    this.root.setCssStyles({ position: "", left: "", top: "", width: "", height: "" });
     host.appendChild(this.root);
   }
 
@@ -852,7 +882,7 @@ export class GridEditor {
   // -------------------------------------------------------------------------
 
   private renderGrid(): void {
-    this.gridEl.innerHTML = "";
+    this.gridEl.empty();
     this.gridEl.style.gridTemplateColumns = `repeat(${this.model.cols}, 1fr)`;
     this.gridEl.style.gridTemplateRows = `repeat(${this.model.rows}, 1fr)`;
 
