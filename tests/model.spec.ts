@@ -235,6 +235,37 @@ test("nextArrowId produces distinct ids", () => {
   assert.notEqual(nextArrowId(), nextArrowId());
 });
 
+test("addArrow never reuses an id a persisted arrow already has (reload collision)", () => {
+  // Arrow ids are persisted in the note JSON; _idCounter resets to 0 on every
+  // plugin reload. Simulate a reload right after a persisted arrow with id "a1"
+  // was loaded: drawing a NEW arrow must not also mint "a1" — that collision is
+  // the "click one arrow, the other's settings appear" bug (openProperties finds
+  // the first arrow with a matching id).
+  _resetIdCounter();
+  const src =
+    '{"version":1,"rows":1,"cols":2,"cells":[{"row":0,"col":0,"label":"A"},{"row":0,"col":1,"label":"B"}],"arrows":[{"id":"a1","from":{"row":0,"col":0},"to":{"row":0,"col":1}}]}';
+  const persisted = parseDiagram(src);
+  assert.equal(persisted.arrows[0].id, "a1");
+  // Counter is now 0 again (as on a fresh reload): a fresh id would be "a1".
+  _resetIdCounter();
+  const m = addArrow(persisted, { from: { row: 0, col: 0 }, to: { row: 0, col: 1 } });
+  const ids = m.arrows.map((a) => a.id);
+  assert.equal(new Set(ids).size, ids.length, "arrow ids are unique within the model");
+  assert.ok(!ids.slice(1).includes("a1"), "the new arrow did not reuse the persisted id");
+});
+
+test("parseDiagram de-duplicates repeated ids in the source JSON", () => {
+  // Hand-authored or hand-edited JSON can contain the same id twice; parsing must
+  // still yield a model whose arrow ids are all distinct, or arrow selection
+  // resolves to the wrong arrow.
+  const src =
+    '{"version":1,"rows":1,"cols":2,"cells":[{"row":0,"col":0,"label":"A"},{"row":0,"col":1,"label":"B"}],"arrows":[{"id":"dup","from":{"row":0,"col":0},"to":{"row":0,"col":1}},{"id":"dup","from":{"row":0,"col":0},"to":{"row":0,"col":1}}]}';
+  const m = parseDiagram(src);
+  const ids = m.arrows.map((a) => a.id);
+  assert.equal(m.arrows.length, 2);
+  assert.equal(new Set(ids).size, 2, "parsed arrow ids are unique");
+});
+
 test("deep round-trip equality for a complex model", () => {
   _resetIdCounter();
   let m = createEmptyModel(2, 2);

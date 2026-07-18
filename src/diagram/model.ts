@@ -79,6 +79,22 @@ export function _resetIdCounter(): void {
   _idCounter = 0;
 }
 
+/**
+ * Generate an arrow id guaranteed to not collide with any id already present in
+ * `existingIds`. Arrow ids are persisted in the note's JSON and survive plugin
+ * reloads, but `_idCounter` resets to 0 on every reload — so a freshly drawn
+ * arrow could otherwise reuse an id (e.g. `a1`) that a persisted arrow already
+ * has, leaving two arrows in the same model with the same id. That collision is
+ * the root cause of "click one arrow, the other arrow's settings appear":
+ * openProperties finds the *first* arrow with a matching id. This advances the
+ * counter past any in-use id before minting one.
+ */
+function uniqueArrowId(existingIds: Set<string>): string {
+  let id = nextArrowId();
+  while (existingIds.has(id)) id = nextArrowId();
+  return id;
+}
+
 export function createEmptyModel(rows = 3, cols = 3): DiagramModel {
   return { version: 1, rows, cols, cells: [], arrows: [] };
 }
@@ -271,10 +287,16 @@ function normalizeModel(raw: unknown): DiagramModel {
   }
 
   const arrows: DiagramArrow[] = [];
+  // Track ids already assigned so a persisted arrow with no id (or a duplicated
+  // id) can't collide with one already kept — a collision makes arrow selection
+  // open the wrong arrow's properties (see uniqueArrowId).
+  const usedIds = new Set<string>();
   for (const a of arrowsRaw) {
     if (typeof a !== "object" || a === null) continue;
     const ao = a as Record<string, unknown>;
-    const id = typeof ao.id === "string" && ao.id ? ao.id : nextArrowId();
+    const rawId = typeof ao.id === "string" && ao.id ? ao.id : null;
+    const id = rawId && !usedIds.has(rawId) ? rawId : uniqueArrowId(usedIds);
+    usedIds.add(id);
     const from = toPos(ao.from, "arrow.from");
     const to = toPos(ao.to, "arrow.to");
     const arrow: DiagramArrow = { id, from, to };
@@ -355,7 +377,13 @@ function byArrow(a: DiagramArrow, b: DiagramArrow): number {
 /** Add an arrow to a model (returns a new model). */
 export function addArrow(model: DiagramModel, arrow: Omit<DiagramArrow, "id"> & { id?: string }): DiagramModel {
   const next = cloneModel(model);
-  const id = arrow.id ?? nextArrowId();
+  // The caller's id (if any) must not collide with an existing arrow's id, and a
+  // freshly minted id must not either — persisted ids survive plugin reloads but
+  // _idCounter resets to 0, so without this guard a new arrow could reuse an id
+  // a persisted arrow already has, making arrow selection open the wrong one.
+  const usedIds = new Set(next.arrows.map((a) => a.id));
+  const id = arrow.id && !usedIds.has(arrow.id) ? arrow.id : uniqueArrowId(usedIds);
+  usedIds.add(id);
   next.arrows.push(normalizeArrowCurve({ ...arrow, id }));
   return next;
 }
