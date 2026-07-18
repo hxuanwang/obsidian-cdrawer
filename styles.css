@@ -87,8 +87,18 @@
 
 /* For a fresh insert (no diagram to track), embedded mode has no JS width set,
    so fall back to the reading-column width the host would have used. */
-.cd-editor-overlay.cd-editor-embedded:not([style*="width"]) {
+.cd-editor-overlay.cd-editor-embedded:not(.cd-editor-inflow):not([style*="width"]) {
   width: min(700px, 92vw);
+}
+
+/* In-flow embedded editor (feature #1): the root is mounted INSIDE the
+   diagram's wrapper as a normal block, so it occupies real layout space and the
+   page text reflows around it — no overlap. Override .cd-editor-overlay's
+   position:fixed and stretch to the wrapper's full width. */
+.cd-editor-overlay.cd-editor-inflow {
+  position: static;
+  width: 100%;
+  z-index: auto;
 }
 
 .cd-editor-chrome {
@@ -730,10 +740,11 @@
   display: block;
 }
 
-/* The static diagram SVG hidden while its embedded editor is open over it
-   (feature #1: embedded mode tracks the diagram's spot). Hidden via visibility
-   rather than display:none so its box (which the editor follows) is preserved. */
+/* The static diagram SVG + edit button, stashed while the embedded editor is
+   mounted in their place (feature #1). Collapsed with display:none (not
+   visibility:hidden) so they take no layout space — the in-flow editor fills the
+   wrapper flush, with no gap where the static diagram was. */
 .cd-embedded-hidden {
-  visibility: hidden;
+  display: none !important;
 }
 

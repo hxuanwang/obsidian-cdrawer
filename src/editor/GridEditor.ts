@@ -39,12 +39,12 @@ import { fromCD } from "../interop/from-cd";
 /** The editor's presentation mode (feature #1).
  *  - "float"    : a draggable, resizable window with border/shadow/title chrome,
  *                 floating over the note at a fixed viewport position.
- *  - "embedded" : de-chromed (no window border/shadow/rounding; transparent
- *                 background) AND tracking the diagram's element so it scrolls
- *                 with the page — the grid reads as part of the note rather than
- *                 a popup. Requires a `followTarget` (the existing diagram's
- *                 SVG); a fresh insert has no diagram to track, so embedded
- *                 there de-chromes but stays fixed at the cursor. */
+ *  - "embedded" : the editor is mounted INSIDE the existing diagram's wrapper as
+ *                 a normal in-flow DOM child, so it occupies real layout space:
+ *                 the page text reflows around it and it scrolls naturally with
+ *                 the note (no overlap). Requires a `followTarget` (the existing
+ *                 diagram's SVG); a fresh insert has no diagram to mount into, so
+ *                 embedded there de-chromes but stays a fixed popup. */
 export type EditorMode = "float" | "embedded";
 
 export interface GridEditorOptions {
@@ -117,18 +117,19 @@ export class GridEditor {
 
   /** Current presentation mode (feature #1); switchable at runtime. */
   private mode: EditorMode;
-  /** The diagram SVG embedded mode tracks (feature #1): the de-chromed editor
-   *  follows it on scroll so it stays at the diagram's spot in the page. Hidden
-   *  while embedded, restored on close / switch-to-float. Null for a fresh
-   *  insert (nothing to track). */
+  /** The existing diagram's SVG (feature #1). In embedded mode the editor is
+   *  mounted INSIDE this SVG's wrapper as an in-flow child, replacing the static
+   *  diagram in the document flow so the page text reflows around the editor and
+   *  it scrolls naturally — no overlap. Null for a fresh insert (nothing to mount
+   *  into → embedded de-chromes but stays a fixed popup). */
   private readonly followTarget: SVGElement | null;
-  /** The wrapper around `followTarget` (e.g. `.cd-diagram-wrap`) — a full-width
-   *  block whose box spans the reading column. Embedded mode follows THIS (not
-   *  the narrow SVG) so the editor's width aligns with the page, and hides it so
-   *  the static diagram + its edit button don't show through. */
-  private followHost: HTMLElement | null = null;
-  /** The rAF id of the scroll-follow loop (embedded mode), cleared on unmode. */
-  private followRaf = 0;
+  /** The wrapper around `followTarget` (`.cd-diagram-wrap` / `.cd-lp-wrap`) the
+   *  editor is embedded into in embedded mode. Tracked so we can restore the
+   *  static diagram (un-hide the SVG + its edit button) on unmount / float. */
+  private embedHost: HTMLElement | null = null;
+  /** The static SVG + edit button, stashed while embedded so they can be
+   *  restored on close / switch-to-float. */
+  private embedHidden: HTMLElement[] = [];
   /** Observes the grid's box so the in-grid arrows re-render when it resizes
    *  (feature #2: arrows follow the resize) — covers resize-drag, window
    *  resize, and any other layout change. rAF-throttled to coalesce callbacks. */
@@ -234,7 +235,7 @@ export class GridEditor {
     // Resize handles are a float-window affordance; skip them when the editor
     // opens in embedded mode (toggleMode re-adds them if the user switches).
     if (this.mode === "float") this.attachResizeHandles();
-    if (this.mode === "embedded") this.startFollow();
+    if (this.mode === "embedded") this.startEmbed();
     this.renderGrid();
     if (this.showPreview) this.renderPreview();
     this.attachResizeObserver();
@@ -261,7 +262,7 @@ export class GridEditor {
     if (this.closed) return;
     this.closed = true;
     this.cancelPreviewDebounce();
-    this.stopFollow();
+    this.stopEmbed();
     this.detachResizeObserver();
     this.closeChromePopover();
     // The properties popover is mounted in document.body (so it can be dragged
@@ -496,24 +497,25 @@ export class GridEditor {
     this.root.style.top = `${top}px`;
   }
 
-  /** Toggle between the float-window and embedded (de-chromed, scroll-following)
-   *  presentation (feature #1). Embedded mode tracks the diagram's element so
-   *  the grid scrolls with the page; float mode is a fixed popup. */
+  /** Toggle between the float-window and embedded (in-flow, page-embedded)
+   *  presentation (feature #1). Embedded mode mounts the editor into the
+   *  diagram's wrapper so the page reflows around it; float mode is a fixed
+   *  popup. */
   private toggleMode(): void {
     this.mode = this.mode === "float" ? "embedded" : "float";
     this.applyModeClass();
-    // Clear any pixel sizing/position pinned by a previous resize/follow so the
-    // new mode's CSS sizing takes effect cleanly.
+    // Clear any pixel sizing/position pinned by a previous resize so the new
+    // mode's CSS sizing takes effect cleanly.
     this.root.style.width = "";
     this.root.style.height = "";
-    // Resize handles are float-window only; scroll-follow is embedded only.
+    // Resize handles are float-window only; in-flow embedding is embedded only.
     if (this.mode === "float") {
-      this.stopFollow();
+      this.stopEmbed();
       this.attachResizeHandles();
       this.position();
     } else {
       this.removeResizeHandles();
-      this.startFollow();
+      this.startEmbed();
     }
     // A mode change can shift the grid's box; re-measure arrows + preview.
     this.renderGridArrows();
@@ -583,67 +585,61 @@ export class GridEditor {
   }
 
   // -------------------------------------------------------------------------
-  // Embedded scroll-follow (feature #1)
+  // Embedded in-flow mount (feature #1)
   //
-  // In embedded mode the de-chromed editor tracks the existing diagram's SVG:
-  // a rAF loop reads its viewport rect each frame and pins the editor's
-  // left/top/width to it, so the grid scrolls with the page exactly where the
-  // diagram was. The static SVG is hidden while embedded so the two don't
-  // overlap, and restored when we leave embedded mode or close.
+  // Embedded mode mounts the editor INSIDE the existing diagram's wrapper as a
+  // normal in-flow DOM child, replacing the static diagram in the document
+  // flow. Because the editor then occupies real layout space, the page text
+  // reflows around it and it scrolls naturally with the note — no fixed
+  // overlay, so no overlap with surrounding text. The static SVG (and its edit
+  // button) are stashed and restored when we leave embedded mode or close.
   // -------------------------------------------------------------------------
 
-  /** Begin tracking the diagram (embedded mode). The editor follows the SVG's
-   *  full-width wrapper so its width aligns with the page column; no-op without
-   *  a target. */
-  private startFollow(): void {
-    this.stopFollow();
-    if (!this.followTarget) return;
-    // The wrapper (`.cd-diagram-wrap` / `.cd-lp-wrap`) is a full-width block —
-    // the reading column — so following it aligns the editor to the page. The
-    // SVG itself is only as wide as its content, far narrower than the column.
-    this.followHost = this.followTarget.closest<HTMLElement>(".cd-diagram-wrap, .cd-lp-wrap")
-      ?? this.followTarget.parentElement;
-    const hideTarget = this.followHost ?? this.followTarget;
-    hideTarget.addClass("cd-embedded-hidden");
-    this.followRaf = this.doc.defaultView?.requestAnimationFrame(() => this.followLoop()) ?? 0;
+  /** Mount the editor into the diagram's wrapper (embedded mode). The editor
+   *  becomes an in-flow child, so the page reflows around it; the static SVG +
+   *  edit button are hidden.
+   *
+   *  Only Reading view is safe for true in-flow embedding: its wrapper
+   *  (`.cd-diagram-wrap`, WITHOUT `.cd-lp-wrap`) is stable Obsidian-rendered DOM
+   *  that isn't swapped mid-session. Live Preview's widget DOM is owned by CM6
+   *  and rebuilt on selection/focus/viewport updates, so mounting into it would
+   *  orphan the editor — there, embedded mode de-chromes but stays a fixed
+   *  popup. A fresh insert has no diagram to embed into either. In both fallback
+   *  cases we return without embedding (the editor keeps its fixed position). */
+  private startEmbed(): void {
+    this.stopEmbed();
+    if (!this.followTarget) return; // fresh insert: nothing to embed into
+    // Reading-view wrapper only: `.cd-diagram-wrap` but NOT the Live-Preview
+    // `.cd-lp-wrap` (which carries both classes).
+    const host = this.followTarget.closest<HTMLElement>(".cd-diagram-wrap");
+    if (!host || host.classList.contains("cd-lp-wrap")) return;
+    this.embedHost = host;
+    // Stash + collapse the static rendering (SVG and the hover/click edit
+    // button) so they take no space and don't show through beneath the editor.
+    this.embedHidden = Array.from(host.children).filter((c) => c !== this.root) as HTMLElement[];
+    for (const el of this.embedHidden) el.addClass("cd-embedded-hidden");
+    // Move the editor root into the wrapper (in-flow). Clear the fixed
+    // positioning + pixel sizing so it participates in the page layout.
+    this.root.addClass("cd-editor-inflow");
+    this.root.style.position = "";
+    this.root.style.left = "";
+    this.root.style.top = "";
+    this.root.style.width = "";
+    this.root.style.height = "";
+    host.appendChild(this.root);
   }
 
-  /** rAF body: position the editor over the target, then schedule the next. */
-  private followLoop(): void {
-    if (this.closed || this.mode !== "embedded" || !this.followTarget) return;
-    this.updateFollowPosition();
-    this.followRaf = this.doc.defaultView?.requestAnimationFrame(() => this.followLoop()) ?? 0;
-  }
-
-  /** Snap the editor's fixed position + width to the tracked element's rect. */
-  private updateFollowPosition(): void {
-    const target = this.followHost ?? this.followTarget;
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    // Position: update every frame so the editor tracks the diagram on scroll.
-    this.root.style.left = `${rect.left}px`;
-    this.root.style.top = `${rect.top}px`;
-    // Width: the host spans the reading column — aligning the editor to it
-    // makes the embedded grid match the page width. Only rewrite when it
-    // actually changes (e.g. window/pane resize) to avoid per-frame thrash;
-    // re-render the in-grid arrows then so the shafts track the new column.
-    const w = Math.max(rect.width, 0);
-    const cur = parseFloat(this.root.style.width);
-    if (!Number.isFinite(cur) || Math.abs(cur - w) > 0.5) {
-      this.root.style.width = `${w}px`;
-      this.renderGridArrows();
+  /** Restore the static diagram and return the editor to document.body (switch
+   *  to float / close). Safe to call when not embedded. */
+  private stopEmbed(): void {
+    if (this.embedHost) {
+      for (const el of this.embedHidden) el.removeClass("cd-embedded-hidden");
+      this.embedHidden = [];
+      // Move the root back to body so float-mode fixed positioning works.
+      if (this.root.parentElement !== this.doc.body) this.doc.body.appendChild(this.root);
+      this.root.removeClass("cd-editor-inflow");
+      this.embedHost = null;
     }
-  }
-
-  /** Stop tracking and reveal the static diagram again (switch-to-float / close). */
-  private stopFollow(): void {
-    if (this.followRaf) {
-      this.doc.defaultView?.cancelAnimationFrame(this.followRaf);
-      this.followRaf = 0;
-    }
-    const hideTarget = this.followHost ?? this.followTarget;
-    hideTarget?.removeClass("cd-embedded-hidden");
-    this.followHost = null;
   }
 
   // -------------------------------------------------------------------------
