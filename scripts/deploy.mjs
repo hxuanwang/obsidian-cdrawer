@@ -20,7 +20,7 @@
  *   node scripts/deploy.mjs [vault-plugin-dir]
  *
  * Defaults to:
- *   /Users/swantraces/Documents/Obsidian/USTC/.obsidian/plugins/obsidian-cdrawer
+ *   /Users/swantraces/Documents/Obsidian/USTC/.obsidian/plugins/cdrawer
  */
 
 import { execSync } from "node:child_process";
@@ -32,7 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, "..");
 
 const DEFAULT_TARGET =
-  "/Users/swantraces/Documents/Obsidian/USTC/.obsidian/plugins/obsidian-cdrawer";
+  "/Users/swantraces/Documents/Obsidian/USTC/.obsidian/plugins/cdrawer";
 const target = process.argv[2] ? resolve(process.argv[2]) : DEFAULT_TARGET;
 
 const ARTIFACTS = ["main.js", "manifest.json", "styles.css"];

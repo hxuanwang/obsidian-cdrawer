@@ -123,9 +123,9 @@ ticked against this repo:
 - [x] Has `manifest.json` with `id`, `name`, `version`, `minAppVersion`,
       `description`, `author`, `authorUrl`, `isDesktopOnly`.
 - [ ] `author` / `authorUrl` point to the real maintainer (currently placeholder
-      `obsidian-cdrawer` / a generic URL — update before submitting).
+      `cdrawer` / a generic URL — update before submitting).
 - [x] Repo name and plugin `id` are consistent and don't collide with an
-      existing community plugin (`obsidian-cdrawer` / `obsidian-cdrawer`).
+      existing community plugin (`cdrawer` / `cdrawer`).
 
 ### Code / safety
 - [x] No `eval`, no `Function(...)` of dynamic strings, no `innerHTML` of

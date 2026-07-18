@@ -3,7 +3,7 @@
 Manual checklist for **Phase 3 — Live Preview display + click-to-reedit**
 (CLAUDE.md §11, §8.2). Run with the plugin enabled in a real test vault, after
 `node scripts/deploy.mjs` (or copying `main.js` / `manifest.json` / `styles.css`
-into `<vault>/.obsidian/plugins/obsidian-cdrawer/`).
+into `<vault>/.obsidian/plugins/cdrawer/`).
 
 > Test in **Live Preview** (the default editing view) and **Reading view**,
 > in light theme AND dark theme.

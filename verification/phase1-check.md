@@ -6,7 +6,7 @@ in **light theme AND dark theme** (and ideally one third-party theme).
 
 > How to use this note in a vault: this repo is a plugin, not a vault. Symlink
 > or copy `main.js`, `manifest.json`, `styles.css` into
-> `<vault>/.obsidian/plugins/obsidian-cdrawer/`, enable the plugin, then open
+> `<vault>/.obsidian/plugins/cdrawer/`, enable the plugin, then open
 > this file (copy it into the vault) in Reading view.
 
 ---
