@@ -554,8 +554,11 @@
   height: auto;
 }
 
-/* Grid add-row / add-col buttons are grid children placed after the cells,
-   each spanning the full width on its own implicit row. */
+/* Grid add-row / add-col buttons live in implicit grid tracks past the cells
+   (+row below, +col to the right). Their grid positions are set inline in JS.
+   Hidden by default and revealed only when the pointer is near the
+   corresponding edge (toggled via .cd-add-show-row / .cd-add-show-col from a
+   mousemove handler), so the editing surface stays uncluttered. */
 .cd-add-row,
 .cd-add-col {
   font-size: 0.75em;
@@ -563,8 +566,16 @@
   padding: 0 8px;
   align-self: center;
   justify-self: center;
-  grid-column: 1 / -1;
   width: max-content;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+.cd-editor-grid.cd-add-show-row .cd-add-row,
+.cd-editor-grid.cd-add-show-col .cd-add-col {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Per-row / per-col remove buttons reuse .cd-remove-btn (already styled) —

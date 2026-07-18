@@ -584,6 +584,32 @@ export class GridEditor {
     this.resizeObserver = null;
   }
 
+  /**
+   * Reveal the +row / +col buttons when the pointer is near the grid's bottom /
+   * right edge (and hide them otherwise), instead of on any grid hover. Tracks
+   * the pointer over the grid with a mousemove handler and toggles the
+   * .cd-add-show-row / .cd-add-show-col classes, which CSS fades the buttons in
+   * on. The button itself is the actual click target (it sits just past the
+   * edge, inside the grid's padded box), so once revealed it stays clickable.
+   */
+  private attachAddButtonHover(): void {
+    const EDGE = 36; // px proximity to an edge that reveals the button
+    const hideAll = (): void => {
+      this.gridEl.removeClass("cd-add-show-row");
+      this.gridEl.removeClass("cd-add-show-col");
+    };
+    this.gridEl.addEventListener("mousemove", (e: MouseEvent) => {
+      const r = this.gridEl.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const nearBottom = y >= r.height - EDGE;
+      const nearRight = x >= r.width - EDGE;
+      this.gridEl.classList.toggle("cd-add-show-row", nearBottom);
+      this.gridEl.classList.toggle("cd-add-show-col", nearRight);
+    });
+    this.gridEl.addEventListener("mouseleave", hideAll);
+  }
+
   // -------------------------------------------------------------------------
   // Embedded in-flow mount (feature #1)
   //
@@ -836,17 +862,28 @@ export class GridEditor {
       }
     }
 
-    // Add-row / add-column controls.
+    // Add-row / add-column controls. +row sits in an implicit grid row BELOW the
+    // cells (spanning all cell columns, centered); +col sits in an implicit
+    // column to the RIGHT (spanning all cell rows, centered). Positions are set
+    // inline because rows/cols are dynamic. Both are hidden by default and
+    // revealed when the pointer is near the corresponding edge — a mousemove
+    // handler on the grid toggles .cd-add-show-row / .cd-add-show-col (see
+    // attachAddButtonHover + .cd-add-btn in styles.css).
     const addRow = this.makeAddButton("cd-add-row", "+ row", () => {
       this.commitModel(appendRow(this.model));
       this.rerenderAll();
     });
+    addRow.style.gridRow = `${this.model.rows + 1}`;
+    addRow.style.gridColumn = `1 / ${this.model.cols + 1}`;
     const addCol = this.makeAddButton("cd-add-col", "+ col", () => {
       this.commitModel(appendCol(this.model));
       this.rerenderAll();
     });
+    addCol.style.gridRow = `1 / ${this.model.rows + 1}`;
+    addCol.style.gridColumn = `${this.model.cols + 1}`;
     this.gridEl.appendChild(addRow);
     this.gridEl.appendChild(addCol);
+    this.attachAddButtonHover();
 
     // Per-row / per-col remove controls (only shown when not destructive, per
     // §7.3: warn rather than silently destroy — here we hide the control if
