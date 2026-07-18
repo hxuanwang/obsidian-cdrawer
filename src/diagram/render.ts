@@ -795,7 +795,9 @@ function buildLabelFo(
   fo.setAttribute("height", String(r2(Math.max(h, 1))));
   fo.setAttribute("class", className);
   // Don't clip descenders / tall scripts that slightly exceed the measure.
-  fo.style.overflow = "visible";
+  // SVGElement exposes Obsidian's setCssStyles helper (like HTMLElement), used
+  // here instead of poking .style.overflow directly.
+  fo.setCssStyles({ overflow: "visible" });
   if (!el.getAttribute("xmlns")) el.setAttribute("xmlns", XHTML_NS);
   fo.appendChild(el);
   return fo;
@@ -815,7 +817,7 @@ function defaultLabelRenderer(doc: Document, metrics: CDStyleMetrics): LabelRend
     const host = doc.createElement("div");
     host.setAttribute("xmlns", XHTML_NS);
     host.className = "cd-rendered-label";
-    host.style.fontSize = `${metrics.fontSize}px`;
+    host.setCssStyles({ fontSize: `${metrics.fontSize}px` });
     const w = (typeof window !== "undefined" ? window : undefined) as
       | { renderMath?: (tex: string, display: boolean) => HTMLElement }
       | undefined;
@@ -856,12 +858,15 @@ function mountLabelHost(
     for (const latex of labels) measured.set(latex, estimateSize(latex, metrics));
     return null;
   }
+  // Hidden, non-interactive host so the labels can be measured off-screen.
   const host = doc.createElement("div");
-  host.style.position = "absolute";
-  host.style.visibility = "hidden";
-  host.style.left = "-10000px";
-  host.style.top = "0";
-  host.style.pointerEvents = "none";
+  host.setCssStyles({
+    position: "absolute",
+    visibility: "hidden",
+    left: "-10000px",
+    top: "0",
+    pointerEvents: "none",
+  });
   doc.body.appendChild(host);
   for (const latex of labels) {
     const el = renderLabel(latex);

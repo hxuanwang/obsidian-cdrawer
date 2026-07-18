@@ -65,6 +65,18 @@
   gap: 8px;
 }
 
+/* A draggable handle (the editor chrome bar and the properties-panel header).
+   The grabbing cursor is applied via the .is-dragging class while a drag is in
+   progress, since the drag continues on window-level listeners after the
+   pointer leaves the handle (where :active would stop applying). */
+.cd-drag-handle {
+  cursor: grab;
+}
+
+.cd-drag-handle.is-dragging {
+  cursor: grabbing;
+}
+
 .cd-editor-title {
   font-weight: 600;
 }
@@ -216,6 +228,12 @@
   stroke: var(--text-normal);
   stroke-width: 1;
   pointer-events: stroke;
+  cursor: pointer;
+}
+
+/* Arrow group is clickable in both the grid editor and the live preview
+   (both attach .cd-arrow). State here in CSS rather than per-element styles. */
+.cd-arrow {
   cursor: pointer;
 }
 
@@ -530,7 +548,16 @@
 .cd-diagram-wrap.cd-hover-edit .cd-diagram-svg,
 .cd-lp-wrap.cd-hover-edit .cd-diagram-svg {
   /* The SVG is non-interactive in hover mode; the button is the click target. */
+  cursor: default;
   pointer-events: none;
+}
+
+/* clickToEdit === true: the whole SVG opens the editor on click. The base
+   .cd-diagram-svg already sets cursor: pointer, but state it explicitly here so
+   the intent is obvious and survives a future base-style change. */
+.cd-diagram-wrap.cd-click-edit .cd-diagram-svg,
+.cd-lp-wrap.cd-click-edit .cd-diagram-svg {
+  cursor: pointer;
 }
 
 .cd-edit-btn {

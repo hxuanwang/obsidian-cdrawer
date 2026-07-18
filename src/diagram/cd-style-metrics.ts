@@ -74,13 +74,18 @@ function measureWithMathJax(doc: Document): CDStyleMetrics | null {
   };
   if (!w.renderMath) return null;
 
+  // Off-screen, non-interactive host for measuring the reference CD render.
+  // `setCssStyles` is Obsidian's preferred helper for applying a batch of
+  // styles rather than assigning each property on .style directly.
   const host = doc.createElement("div");
-  host.style.position = "absolute";
-  host.style.visibility = "hidden";
-  host.style.left = "-9999px";
-  host.style.top = "0";
-  host.style.pointerEvents = "none";
-  host.style.opacity = "0";
+  host.setCssStyles({
+    position: "absolute",
+    visibility: "hidden",
+    left: "-9999px",
+    top: "0",
+    pointerEvents: "none",
+    opacity: "0",
+  });
   doc.body.appendChild(host);
 
   try {

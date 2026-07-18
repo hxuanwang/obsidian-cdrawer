@@ -23,7 +23,9 @@ export function attachEditAffordance(
   onEdit: () => void,
 ): void {
   if (clickToEdit) {
-    svg.style.cursor = "pointer";
+    // CSS (.cd-click-edit .cd-diagram-svg) sets cursor: pointer; the whole
+    // SVG is the click target.
+    wrap.addClass("cd-click-edit");
     svg.addEventListener("click", (e) => {
       e.stopPropagation();
       onEdit();
@@ -32,10 +34,9 @@ export function attachEditAffordance(
   }
 
   // Hover-to-edit: a small button shown on hover. The SVG itself stays
-  // non-interactive so reading/scrolling never opens the editor.
-  svg.style.cursor = "default";
-  svg.style.pointerEvents = "none";
-
+  // non-interactive so reading/scrolling never opens the editor. CSS
+  // (.cd-hover-edit .cd-diagram-svg) sets cursor: default and pointer-events:
+  // none; the .cd-hover-edit class on the wrapper switches that on.
   wrap.addClass("cd-hover-edit");
   const btn = wrap.ownerDocument.createElement("button");
   btn.type = "button";

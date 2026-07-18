@@ -227,7 +227,7 @@ export class GridEditor {
 
   /** Make `handle` a drag handle that moves the overlay. */
   private makeDragHandle(handle: HTMLElement): void {
-    handle.style.cursor = "grab";
+    handle.addClass("cd-drag-handle");
     let dragging = false;
     let startX = 0;
     let startY = 0;
@@ -243,7 +243,7 @@ export class GridEditor {
       const rect = this.root.getBoundingClientRect();
       originLeft = rect.left;
       originTop = rect.top;
-      handle.style.cursor = "grabbing";
+      handle.addClass("is-dragging");
       e.preventDefault();
     });
 
@@ -257,7 +257,7 @@ export class GridEditor {
     const onUp = () => {
       if (!dragging) return;
       dragging = false;
-      handle.style.cursor = "grab";
+      handle.removeClass("is-dragging");
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -972,7 +972,6 @@ export class GridEditor {
     g.setAttribute("class", "cd-arrow");
     g.setAttribute("data-arrow-id", arrow.id);
     if (this.selectedArrowId === arrow.id) g.addClass("is-selected");
-    g.style.cursor = "pointer";
 
     // Shaft (Bézier when curved, else a line).
     const shaft = this.doc.createElementNS("http://www.w3.org/2000/svg", "path");
@@ -1011,8 +1010,7 @@ export class GridEditor {
       labelHost.setAttribute("y", String(apexY + nrm.y * 14 - 10));
       labelHost.setAttribute("width", "60");
       labelHost.setAttribute("height", "20");
-      labelHost.style.overflow = "visible";
-      labelHost.style.pointerEvents = "none";
+      labelHost.setCssStyles({ overflow: "visible", pointerEvents: "none" });
       const inner = this.doc.createElement("div");
       inner.className = "cd-arrow-label";
       try {
@@ -1405,7 +1403,7 @@ export class GridEditor {
    * Clamped to keep the panel inside the overlay.
    */
   private makePropertiesDraggable(handle: HTMLElement, panel: HTMLElement): void {
-    handle.style.cursor = "grab";
+    handle.addClass("cd-drag-handle");
     let dragging = false;
     let startX = 0;
     let startY = 0;
@@ -1422,7 +1420,7 @@ export class GridEditor {
       const rootRect = this.root.getBoundingClientRect();
       originLeft = rect.left - rootRect.left;
       originTop = rect.top - rootRect.top;
-      handle.style.cursor = "grabbing";
+      handle.addClass("is-dragging");
       e.preventDefault();
       e.stopPropagation();
     });
@@ -1443,7 +1441,7 @@ export class GridEditor {
     const onUp = () => {
       if (!dragging) return;
       dragging = false;
-      handle.style.cursor = "grab";
+      handle.removeClass("is-dragging");
     };
     // window-level so the drag continues even if the pointer leaves the handle.
     window.addEventListener("pointermove", onMove);
@@ -1489,7 +1487,6 @@ export class GridEditor {
     for (const g of groups) {
       const id = g.getAttribute("data-arrow-id");
       if (!id) continue;
-      g.style.cursor = "pointer";
       g.addEventListener("click", (e: MouseEvent) => this.onArrowClick(id, e));
     }
   }

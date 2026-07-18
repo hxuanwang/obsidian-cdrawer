@@ -88,7 +88,7 @@ export class CDSettingTab extends PluginSettingTab {
           this.plugin.settings.defaultRows = n;
           await this.plugin.saveSettings();
         });
-        text.inputEl.style.width = "5em";
+        text.inputEl.setCssStyles({ width: "5em" });
         return text;
       })
       .addText((text) => {
@@ -102,7 +102,7 @@ export class CDSettingTab extends PluginSettingTab {
           this.plugin.settings.defaultCols = n;
           await this.plugin.saveSettings();
         });
-        text.inputEl.style.width = "5em";
+        text.inputEl.setCssStyles({ width: "5em" });
         return text;
       });
 
