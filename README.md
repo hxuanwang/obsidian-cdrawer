@@ -17,7 +17,7 @@ they live in plain text in your vault, diff cleanly, and survive sync/undo. You
 can also **export to [tikz-cd](https://ctan.org/pkg/tikz-cd)** or plain AMS `CD`
 for use in a paper, and **import** either back into an editable diagram.
 
-> **Status:** v1.0. Display (rendering existing diagrams) works on desktop and
+> **Status:** v1.1.0 Display (rendering existing diagrams) works on desktop and
 > mobile. The grid **editor** is desktop-only for now — see
 > [Mobile](#mobile).
 
