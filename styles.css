@@ -1,13 +1,5 @@
 /* obsidian-cdrawer styles */
 
-/* Custom ribbon glyph (the homotopy-lifting-property square, main.ts): keep it
-   sized like Obsidian's Lucide ribbon icons and inherit the theme text color. */
-.cd-ribbon-icon.svg-icon {
-  width: var(--icon-size, 20px);
-  height: var(--icon-size, 20px);
-  stroke: currentColor;
-}
-
 .cd-diagram-svg {
   display: inline-block;
   background: transparent;

@@ -1145,19 +1145,19 @@ export class GridEditor {
   }
 
   private appendGridHook(g: SVGGElement, x: number, y: number, dx: number, dy: number): void {
+    // Mirror render.ts's hook: start perpendicular to the tail (start→tail ⊥
+    // shaft), control behind the tail on the shaft line (end-tangent = shaft
+    // dir, no kink). h is larger than the head so the curl reads as a hook.
     const px = dy;
     const py = -dx;
-    const h = 7;
-    const back = h * 0.9; // curl originates behind the tail so it reads as ↪, not a fork
-    const sx = x - dx * back + px * h;
-    const sy = y - dy * back + py * h;
-    const cx = x + px * h * 0.6;
-    const cy = y + py * h * 0.6;
-    const ex = x + dx * h;
-    const ey = y + dy * h;
+    const h = 9;
+    const sx = x + px * h;
+    const sy = y + py * h;
+    const cx = x - dx * h;
+    const cy = y - dy * h;
     const p = this.doc.createElementNS("http://www.w3.org/2000/svg", "path");
     p.setAttribute("class", "cd-arrow-path");
-    p.setAttribute("d", `M ${sx} ${sy} Q ${cx} ${cy} ${ex} ${ey}`);
+    p.setAttribute("d", `M ${sx} ${sy} Q ${cx} ${cy} ${x} ${y}`);
     g.appendChild(p);
   }
 

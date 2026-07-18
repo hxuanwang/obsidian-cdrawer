@@ -179,7 +179,11 @@ export function deriveRenderConstants(metrics: CDStyleMetrics): RenderConstants 
     headLen,
     headHalf,
     tailTickHalf: headHalf * 1.05,
-    hookLen: headLen * 0.75,
+    // Hook curl radius. Sized so the curl is clearly visible (longer than the
+    // arrowhead) — the line from the curl's start to the tail is perpendicular
+    // to the shaft, so a larger hookLen makes that perpendicular leg read as a
+    // real hook rather than a stub (see appendHookTail).
+    hookLen: fs * 0.42,
     multiArrowStep: fs * 0.5,
     // Gap between an arrow shaft and its label box.
     labelGap: fs * 0.4,
@@ -719,17 +723,22 @@ function appendMapstoBar(
   g.appendChild(headPath(doc, d, sw));
 }
 
-/** hook (↪ / \hookrightarrow): a small curl at the tail that originates from
- *  BEHIND the shaft start (displaced against the direction of travel) and sweeps
- *  up-and-forward to meet the shaft, on the left-of-travel side (up for a
- *  rightward arrow, matching the AMS glyph).
+/** hook (↪ / \hookrightarrow): a J-shaped curl at the tail, on the
+ *  left-of-travel side (up for a rightward arrow, matching the AMS glyph).
  *
- *  Geometry: the start sits back-and-perpendicular to the tail, the control
- *  pulls the curve up toward the perpendicular apex just past the tail, and the
- *  end lands on the shaft a little ahead of the tail. Starting purely
- *  perpendicular (the old shape) left the hook as a free tine running parallel
- *  to the shaft — reading as a two-pronged fork, not a hook. Curling from
- *  behind is what makes it read as ↪. */
+ *  Two constraints make it read as a proper hook:
+ *   1. The curl ENDS exactly at the tail with end-tangent == shaft direction,
+ *      so it joins the shaft smoothly (no kink).
+ *   2. The curl's START lies directly perpendicular to the tail — the line from
+ *      start to tail is perpendicular to the shaft — so the hook is a clean
+ *      quarter-arc, not a stubby diagonal.
+ *  Construction (quadratic Bézier, h = hookLen):
+ *    end     = tail (x, y)
+ *    start   = tail + h·perp         (perpendicular to the tail — constraint 2)
+ *    control = tail − h·dir          (behind the tail, on the shaft line)
+ *  For a rightward arrow: start (x, y−h), control (x−h, y), end (x, y) — the
+ *  curl sweeps from straight-up, around, into the shaft pointing right; the
+ *  end-tangent (end−control) = (h, 0) = shaft dir (constraint 1). */
 function appendHookTail(
   g: SVGGElement,
   doc: Document,
@@ -740,17 +749,18 @@ function appendHookTail(
   C: RenderConstants,
   sw: number,
 ): void {
-  const px = dirY;
+  const px = dirY; // perpLeft(dir) = (dirY, -dirX)
   const py = -dirX;
   const h = C.hookLen;
-  const back = h * 0.9; // how far behind the tail the curl originates
-  const sx = x - dirX * back + px * h;
-  const sy = y - dirY * back + py * h;
-  const cx = x + px * h * 0.6;
-  const cy = y + py * h * 0.6;
-  const ex = x + dirX * h;
-  const ey = y + dirY * h;
-  g.appendChild(headPath(doc, `M ${r2(sx)} ${r2(sy)} Q ${r2(cx)} ${r2(cy)} ${r2(ex)} ${r2(ey)}`, sw));
+  // start: perpendicular to the tail — so the start→tail line is perpendicular
+  // to the shaft (the hook reads as a quarter-arc, not a diagonal stub).
+  const sx = x + px * h;
+  const sy = y + py * h;
+  // control: behind the tail on the shaft line → end-tangent == shaft dir, so
+  // the curl joins the shaft with no kink.
+  const cx = x - dirX * h;
+  const cy = y - dirY * h;
+  g.appendChild(headPath(doc, `M ${r2(sx)} ${r2(sy)} Q ${r2(cx)} ${r2(cy)} ${r2(x)} ${r2(y)}`, sw));
 }
 
 function headPath(doc: Document, d: string, sw: number): SVGPathElement {
