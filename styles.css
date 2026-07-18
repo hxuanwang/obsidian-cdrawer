@@ -457,6 +457,34 @@
   border-color: var(--background-modifier-error);
 }
 
+/* Delete-diagram button (feature #2): same weight as Discard but always
+   error-toned, since it removes the diagram from the note (vs. Discard, which
+   only abandons the edit session). */
+.cd-editor-delete {
+  font-size: var(--font-ui-smaller);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-error);
+  border: 1px solid var(--background-modifier-error);
+  cursor: pointer;
+}
+
+.cd-editor-delete:hover {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+}
+
+/* A selected arrow's label is draggable to reposition it (feature #3). The
+   foreignObject carries this class; its inner label keeps the grab cursor. */
+.cd-arrow-label-drag {
+  cursor: grab;
+}
+
+.cd-arrow-label-drag:active {
+  cursor: grabbing;
+}
+
 /* Import / Export chrome buttons (§9). Same weight as Discard so the three
    read as one action row. */
 .cd-editor-chrome-btn {

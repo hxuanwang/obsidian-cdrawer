@@ -19,7 +19,7 @@ import { EditorSelection } from "@codemirror/state";
 
 import { parseDiagram, serializeDiagram, type DiagramModel } from "./diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "./diagram/render";
-import { resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
+import { getCDStyleMetrics, resetCDStyleMetricsCache } from "./diagram/cd-style-metrics";
 import { GridEditor, freshModel } from "./editor/GridEditor";
 import { cdLivePreviewExtension } from "./view/live-preview";
 import { attachEditAffordance } from "./view/edit-affordance";
@@ -598,12 +598,23 @@ function cmRangeAnchor(view: EditorView, from: number, to: number): { x: number;
  * Build a LabelRenderer backed by Obsidian's renderMath (MathJax). Mirrors the
  * container shape of render.ts's internal defaultLabelRenderer so the SVG
  * builder's measure/clone path works identically.
+ *
+ * The host's font-size is pinned to the measured CD metrics (§6.4) so the
+ * label is laid out at the SAME size when measured off-screen (host appended to
+ * document.body, which inherits the UI font-size) as when rendered inside the
+ * SVG (in the reading-view, which inherits the note's font-size). Without this
+ * pin, a long label like `A\otimes B\otimes C` measures narrower than it
+ * renders, so the arrow shaft — clipped to the (too-small) measured box — starts
+ * inside the real label and overlaps it. Short labels hide the discrepancy
+ * because their width error is small.
  */
 function makeLabelRenderer(doc: Document): LabelRenderer {
+  const metrics = getCDStyleMetrics(doc);
   return (latex: string): HTMLElement => {
     const host = doc.createElement("div");
     host.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
     host.className = "cd-rendered-label";
+    host.setCssStyles({ fontSize: `${metrics.fontSize}px` });
     try {
       host.appendChild(renderMath(latex, false));
     } catch {

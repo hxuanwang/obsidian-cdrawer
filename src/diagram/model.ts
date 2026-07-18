@@ -43,6 +43,14 @@ export interface DiagramArrow {
    * properties popover. Out-of-range values are clamped on parse.
    */
   curve?: number;
+  /**
+   * Manual label offset in diagram units, applied ON TOP of the position the
+   * label would otherwise take (from labelPosition / the auto placement). Lets
+   * the user drag an arrow's label to fine-tune its placement (e.g. nudge a
+   * label off a crossing shaft). Stored as a fraction of the measured font size
+   * so it scales with the diagram; {0,0} (default) = no manual adjustment.
+   */
+  labelOffset?: { x: number; y: number };
 }
 
 export interface DiagramModel {
@@ -317,6 +325,11 @@ function normalizeModel(raw: unknown): DiagramModel {
     }
     if (typeof ao.bidirectional === "boolean") arrow.bidirectional = ao.bidirectional;
     if (typeof ao.curve === "number") arrow.curve = ao.curve;
+    const off = ao.labelOffset as { x?: unknown; y?: unknown } | undefined;
+    if (off && typeof off.x === "number" && typeof off.y === "number" &&
+        Number.isFinite(off.x) && Number.isFinite(off.y)) {
+      arrow.labelOffset = { x: off.x, y: off.y };
+    }
     arrows.push(normalizeArrowCurve(arrow));
   }
 
@@ -389,23 +402,36 @@ export function addArrow(model: DiagramModel, arrow: Omit<DiagramArrow, "id"> & 
 }
 
 /**
- * Clamp/drop an arrow's `curve` so the stored model stays sparse: a non-finite
- * or zero curve is removed (0 = straight = the default), a finite nonzero value
- * is clamped to [-1, 1]. Applied at every mutation entry point (addArrow,
- * updateArrow) so `"curve": 0` never litters the serialized JSON.
+ * Normalize an arrow's sparse-invariant fields so the stored model (and thus
+ * the serialized JSON) never carries a redundant default:
+ *   - `curve`: a non-finite or 0 curve is dropped (0 = straight = the default);
+ *     a finite nonzero value is clamped to [-1, 1].
+ *   - `labelOffset`: dropped unless both components are finite numbers and at
+ *     least one is non-zero ({0,0} = no manual adjustment = the default).
+ * Applied at every mutation entry point (addArrow, updateArrow) and on parse.
  */
 function normalizeArrowCurve<T extends DiagramArrow>(a: T): T {
   if (a.curve === undefined || a.curve === null) {
     if ("curve" in a) delete (a as DiagramArrow).curve;
-    return a;
-  }
-  if (!Number.isFinite(a.curve)) {
+  } else if (!Number.isFinite(a.curve)) {
     delete a.curve;
-    return a;
+  } else {
+    const c = Math.max(CURVE_MIN, Math.min(CURVE_MAX, a.curve));
+    if (c === 0) delete a.curve;
+    else a.curve = c;
   }
-  const c = Math.max(CURVE_MIN, Math.min(CURVE_MAX, a.curve));
-  if (c === 0) delete a.curve;
-  else a.curve = c;
+  const off = a.labelOffset;
+  if (off !== undefined) {
+    if (
+      off && typeof off.x === "number" && typeof off.y === "number" &&
+      Number.isFinite(off.x) && Number.isFinite(off.y) &&
+      (off.x !== 0 || off.y !== 0)
+    ) {
+      a.labelOffset = { x: off.x, y: off.y };
+    } else {
+      delete a.labelOffset;
+    }
+  }
   return a;
 }
 

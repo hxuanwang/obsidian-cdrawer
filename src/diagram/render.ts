@@ -384,6 +384,13 @@ export function layoutDiagram(
       out.label = a.label;
       out.labelX = apexX + nrm.x * dist;
       out.labelY = apexY + nrm.y * dist;
+      // Manual label offset (feature #3): a user-dragged nudge applied on top
+      // of the auto placement. Stored as a fraction of the font size so it
+      // scales with the diagram; {0,0} (the default) is a no-op.
+      if (a.labelOffset && Number.isFinite(a.labelOffset.x) && Number.isFinite(a.labelOffset.y)) {
+        out.labelX += a.labelOffset.x * metrics.fontSize;
+        out.labelY += a.labelOffset.y * metrics.fontSize;
+      }
       out.labelWidth = ls.width;
       out.labelHeight = ls.height;
     }
@@ -500,7 +507,15 @@ export async function renderDiagramAsync(
     const host = mountLabelHost(doc, renderLabel, unique, prototypes, measured, metrics);
     if (host) {
       await awaitMathJaxTypeset(doc, host);
-      measureMountedLabels(host, prototypes, measured, metrics);
+      // Await real (non-zero) box sizes before building layout. Reading
+      // offsets synchronously right after the typeset promise resolves can
+      // yield 0 (MathJax inserts nodes before the browser lays them out),
+      // which collapses every column to one size and makes all arrows the
+      // same length regardless of labels — the block-render vs. preview
+      // mismatch. Polling layout frames lets the warm-path preview and the
+      // cold-path block render both measure true widths.
+      await measureMountedLabelsAsync(host, prototypes, measured, metrics, doc);
+      host.remove();
     }
     measure = makeMeasure(measured, metrics);
   }
@@ -876,7 +891,22 @@ function mountLabelHost(
   return host;
 }
 
-/** Read real offsets from a mounted, typeset label host into `measured`. */
+/**
+ * Read real offsets from a mounted, typeset label host into `measured`.
+ *
+ * Synchronous read after the MathJax typeset promise resolves can still return
+ * offsetWidth/offsetHeight of 0 — MathJax inserts its CHTML nodes, but the
+ * browser hasn't necessarily computed layout for them on the same microtask.
+ * A zero width collapses every column to the same size and makes all arrows the
+ * same length regardless of their labels (the block-render bug: the first
+ * render on a freshly loaded note measured too early, while the editor's later
+ * preview — MathJax already warm — measured correctly).
+ *
+ * So this reads synchronously first, and if any label still has a zero
+ * dimension, `renderDiagramAsync` re-runs it after a layout frame (see
+ * `measureMountedLabelsAsync`). Labels that genuinely have no box (rare) keep
+ * the estimate fallback.
+ */
 function measureMountedLabels(
   host: HTMLElement,
   prototypes: Map<string, HTMLElement>,
@@ -890,7 +920,40 @@ function measureMountedLabels(
       height: el.offsetHeight > 0 ? el.offsetHeight : est.height,
     });
   }
-  host.remove();
+}
+
+/**
+ * Async measure: await a layout frame, then read offsets. If any are still zero
+ * (MathJax still filling in), poll a few more frames before giving up and
+ * falling back to estimates. Resolves once every label has a real (non-zero)
+ * box or the poll budget is exhausted. Keeps the host mounted until the end so
+ * later frames can re-read it.
+ */
+async function measureMountedLabelsAsync(
+  host: HTMLElement,
+  prototypes: Map<string, HTMLElement>,
+  measured: Map<string, MeasuredSize>,
+  metrics: CDStyleMetrics,
+  doc: Document,
+): Promise<void> {
+  const view = doc.defaultView ?? (typeof window !== "undefined" ? window : undefined);
+  const nextFrame = (): Promise<void> =>
+    view
+      ? new Promise<void>((r) => view.requestAnimationFrame(() => r()))
+      : Promise.resolve();
+  // A handful of frames is plenty for MathJax CHTML to settle after the typeset
+  // promise; we don't want to hang the render on a pathological case.
+  for (let i = 0; i < 10; i++) {
+    measureMountedLabels(host, prototypes, measured, metrics);
+    let settled = true;
+    for (const el of prototypes.values()) {
+      if (el.offsetWidth === 0 || el.offsetHeight === 0) { settled = false; break; }
+    }
+    if (settled) return;
+    await nextFrame();
+  }
+  // Final read after the budget is exhausted (fills any stragglers w/ estimates).
+  measureMountedLabels(host, prototypes, measured, metrics);
 }
 
 /** Rough size estimate used only when real measurement is impossible. */

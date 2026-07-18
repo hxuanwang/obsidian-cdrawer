@@ -31,6 +31,7 @@ import {
   type ArrowHead, type DiagramArrow, type DiagramModel, type LabelPosition, type LineStyle,
 } from "../diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "../diagram/render";
+import { getCDStyleMetrics } from "../diagram/cd-style-metrics";
 import { toTikzcd } from "../interop/to-tikzcd";
 import { fromTikzcd } from "../interop/from-tikzcd";
 import { toCD, canExportToCD } from "../interop/to-cd";
@@ -394,6 +395,22 @@ export class GridEditor {
       this.discard();
     });
     actions.appendChild(discard);
+
+    // Delete the whole diagram (feature #2): clears the draft to empty and
+    // commits. For an existing diagram this removes its block from the note;
+    // for a fresh insert it writes nothing. Distinguished from Discard, which
+    // abandons the edit session without touching the stored diagram. A confirm
+    // guards the destructive act so a misclick can't erase a diagram.
+    const del = this.doc.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.className = "cd-editor-delete";
+    del.title = "Remove this diagram from the note";
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.deleteDiagram();
+    });
+    actions.appendChild(del);
     chrome.appendChild(actions);
 
     this.root.appendChild(chrome);
@@ -1441,15 +1458,24 @@ export class GridEditor {
     hit.setAttribute("d", isCurved ? `M ${x1} ${y1} Q ${ctrlX} ${ctrlY} ${x2} ${y2}` : `M ${x1} ${y1} L ${x2} ${y2}`);
     g.appendChild(hit);
 
-    // Label at the curve's apex (the chord midpoint when straight).
+    // Label at the curve's apex (the chord midpoint when straight), nudged by
+    // any manual labelOffset (feature #3).
     if (arrow.label && arrow.label.trim() !== "") {
       const labelHost = this.doc.createElementNS("http://www.w3.org/2000/svg", "foreignObject");
       const nrm = this.labelNormal(arrow.labelPosition ?? "left", dx, dy);
-      labelHost.setAttribute("x", String(apexX + nrm.x * 14 - 30));
-      labelHost.setAttribute("y", String(apexY + nrm.y * 14 - 10));
+      const off = arrow.labelOffset;
+      const offX = off && Number.isFinite(off.x) ? off.x * this.labelDragFontSize() : 0;
+      const offY = off && Number.isFinite(off.y) ? off.y * this.labelDragFontSize() : 0;
+      labelHost.setAttribute("x", String(apexX + nrm.x * 14 - 30 + offX));
+      labelHost.setAttribute("y", String(apexY + nrm.y * 14 - 10 + offY));
       labelHost.setAttribute("width", "60");
       labelHost.setAttribute("height", "20");
-      labelHost.setCssStyles({ overflow: "visible", pointerEvents: "none" });
+      // The label is draggable ONLY for the selected arrow (feature #3): grab
+      // it and move the pointer to nudge labelOffset. Non-selected labels keep
+      // pointer-events:none so they never steal the arrow's click.
+      const selected = this.selectedArrowId === arrow.id;
+      labelHost.setCssStyles({ overflow: "visible", pointerEvents: selected ? "auto" : "none" });
+      if (selected) labelHost.addClass("cd-arrow-label-drag");
       const inner = this.doc.createElement("div");
       inner.className = "cd-arrow-label";
       try {
@@ -1458,6 +1484,9 @@ export class GridEditor {
         inner.textContent = arrow.label;
       }
       labelHost.appendChild(inner);
+      if (selected) {
+        this.attachLabelDrag(labelHost, arrow.id, () => ({ baseX: apexX + nrm.x * 14 - 30, baseY: apexY + nrm.y * 14 - 10 }));
+      }
       g.appendChild(labelHost);
     }
 
@@ -1548,6 +1577,71 @@ export class GridEditor {
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     });
+  }
+
+  /** The font size used to scale a dragged label offset into diagram units.
+   *  labelOffset is stored as a fraction of the font size (so it scales with
+   *  the diagram); the drag converts pixel movement into that fraction here. */
+  private labelDragFontSize(): number {
+    try {
+      return getCDStyleMetrics(this.doc).fontSize || 18;
+    } catch {
+      return 18;
+    }
+  }
+
+  /**
+   * Make a label's foreignObject draggable to reposition the arrow's label
+   * (feature #3). A press-drag sets `labelOffset` (in font-size fractions) from
+   * the pointer delta; releasing keeps it. A press without a drag (a click)
+   * falls through to select the arrow (handled by the arrow group's click
+   * listener). `basePos()` returns the label's pre-offset anchor so the drag is
+   * relative to the auto position.
+   */
+  private attachLabelDrag(
+    host: SVGForeignObjectElement,
+    arrowId: string,
+    basePos: () => { baseX: number; baseY: number },
+  ): void {
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+    const THRESH = 3; // px before a press counts as a drag (vs. a click)
+    host.addEventListener("pointerdown", (e: PointerEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+      startX = e.clientX;
+      startY = e.clientY;
+      dragging = false;
+      const fs = this.labelDragFontSize();
+      const startOffX = (this.currentLabelOffset(arrowId).x) * fs;
+      const startOffY = (this.currentLabelOffset(arrowId).y) * fs;
+      const onMove = (ev: PointerEvent) => {
+        if (!dragging) {
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < THRESH) return;
+          dragging = true;
+        }
+        void basePos;
+        const dxPx = ev.clientX - startX + startOffX;
+        const dyPx = ev.clientY - startY + startOffY;
+        this.patchArrow(arrowId, {
+          labelOffset: { x: dxPx / fs, y: dyPx / fs },
+        }, { preview: false });
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (dragging && this.showPreview) this.renderPreview();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    });
+  }
+
+  /** Read an arrow's current labelOffset (defaulting to {0,0}). */
+  private currentLabelOffset(arrowId: string): { x: number; y: number } {
+    const a = this.model.arrows.find((x) => x.id === arrowId);
+    return a?.labelOffset ?? { x: 0, y: 0 };
   }
 
   private appendGridHead(g: SVGGElement, tipX: number, tipY: number, dx: number, dy: number, head: ArrowHead): void {
@@ -1740,6 +1834,20 @@ export class GridEditor {
       this.patchArrow(arrowId, { labelPosition: posSelect.value as LabelPosition });
     });
     addField("Label position", posSelect);
+
+    // Reset a dragged label back to its auto position (feature #3). Only shown
+    // when there's a manual offset to clear; hidden otherwise.
+    if (arrow.labelOffset && (arrow.labelOffset.x !== 0 || arrow.labelOffset.y !== 0)) {
+      const resetBtn = this.doc.createElement("button");
+      resetBtn.type = "button";
+      resetBtn.textContent = "Reset label position";
+      resetBtn.className = "cd-curve-straighten";
+      resetBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.patchArrow(arrowId, { labelOffset: { x: 0, y: 0 } });
+      });
+      pop.appendChild(resetBtn);
+    }
 
     // Head style
     const headSelect = this.doc.createElement("select");
@@ -2109,6 +2217,19 @@ export class GridEditor {
       else this.redo();
       return;
     }
+    // Delete / Backspace removes the selected arrow (when no cell label is being
+    // edited — otherwise the input owns those keys for text editing).
+    if ((e.key === "Delete" || e.key === "Backspace") && !this.editingCell) {
+      if (this.selectedArrowId) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.commitModel(removeArrow(this.model, this.selectedArrowId));
+        this.selectedArrowId = null;
+        this.closeProperties();
+        this.rerenderAll();
+        return;
+      }
+    }
     if (e.key === "Escape") {
       // If a chrome popover (Import/Export) is open, Escape closes just that.
       if (this.chromePopover) {
@@ -2167,6 +2288,30 @@ export class GridEditor {
     const cb = this.onDiscard;
     this.close();
     cb();
+  }
+
+  /**
+   * Delete the whole diagram (feature #2). Confirms first (destructive), then
+   * commits an empty model — onCommit(null) removes an existing block from the
+   * note or writes nothing for a fresh insert (§7.4). The user keeps their undo
+   * history for the session, but the committed result is an empty diagram.
+   */
+  private deleteDiagram(): void {
+    if (this.closed) return;
+    // A confirm is cheap insurance against erasing a real diagram by accident;
+    // for an already-empty draft (fresh insert with nothing drawn) skip it.
+    const hasContent =
+      this.model.arrows.length > 0 ||
+      this.model.cells.some((c) => c.label.trim() !== "");
+    if (hasContent) {
+      const ok = this.doc.defaultView?.confirm(
+        "Delete this diagram? It will be removed from the note.",
+      );
+      if (!ok) return;
+    }
+    const cb = this.onCommit;
+    this.close();
+    cb(null);
   }
 }
 
