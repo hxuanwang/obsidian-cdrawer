@@ -22,6 +22,11 @@ for use in a paper, and **import** either back into an editable diagram.
 > [Mobile](#mobile).
 
 > **Recently added**
+> - **Label size** setting — scale the labels (and, proportionally, the spacing)
+>   of rendered diagrams from 50%–150%. 100% is the default. Applies only to the
+>   committed/rendered diagrams (Reading view + Live Preview), not to the grid
+>   editor's own cells or its live preview, which keep their native sizing.
+>   Existing diagrams update live as you drag the slider.
 > - Two editor modes: a **floating window** (draggable, resizable) and
 >   **embedded** in the page (Reading view — the grid sits in the document flow
 >   and scrolls with the note, no overlap). Switchable live from the top bar.
@@ -256,6 +261,10 @@ upgrade path from notes that already use native `CD`.
 
 - **Default grid size** — rows × columns for a freshly inserted diagram.
 - **Default arrow head / line style** — applied to newly drawn arrows.
+- **Label size** — a slider (50%–150%, default 100%) scaling the labels of
+  rendered diagrams relative to their default size; the diagram's spacing scales
+  proportionally. Affects only the committed/rendered diagrams (Reading view and
+  Live Preview), not the grid editor itself. Existing diagrams update live.
 - **Click to edit diagrams** — on: click anywhere on a rendered diagram to edit;
   off (default): an Edit button appears on hover.
 - **Show editor preview** — toggle the live rendered preview beneath the grid.
@@ -286,7 +295,9 @@ that, re-measuring on theme change. Row/column gaps floor at AMS's
 `\arrowlength` (≈ 3 em) so a short-label diagram spaces identically to a native
 `CD` block, and only stretches where content forces it. Strokes use
 `currentColor` with `var(--text-normal)`, so diagrams track the theme exactly
-like native math.
+like native math. The **Label size** setting (see [Settings](#settings)) multiplies
+that measured base size for rendered diagrams, scaling labels, spacing, and arrow
+weight together.
 
 ---
 
@@ -320,7 +331,7 @@ src/
   interop/
     to-tikzcd.ts  from-tikzcd.ts  to-cd.ts  from-cd.ts
 tests/
-  model.spec.ts  render.spec.ts  interop.spec.ts  perf.spec.ts
+  model.spec.ts  render.spec.ts  interop.spec.ts  perf.spec.ts  scale.spec.ts
 verification/
   phase{1,3,4,5,6}-check.md   manual verification checklists per phase
 ```
