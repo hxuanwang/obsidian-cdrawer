@@ -28,12 +28,9 @@ import {
   Decoration,
   DecorationSet,
   EditorView,
-  PluginValue,
-  ViewPlugin,
-  ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { EditorState, type Range } from "@codemirror/state";
+import { EditorState, StateField, type Range } from "@codemirror/state";
 
 import { parseDiagram, type DiagramModel } from "../diagram/model";
 import { renderDiagramAsync, type LabelRenderer } from "../diagram/render";
@@ -63,6 +60,13 @@ export interface LivePreviewOptions {
    * user clicked — passed so embedded mode can track it (feature #1).
    */
   onEdit: (view: EditorView, block: CdBlock, model: DiagramModel, svg: SVGElement) => void;
+  /**
+   * Reports a non-fatal error from the ViewPlugin (e.g. a throw while building
+   * decorations). The host surfaces it as a Notice so the note still opens
+   * (raw block shown) and the user can read the cause without the dev console.
+   * Optional; when omitted, errors are swallowed and the note still opens.
+   */
+  onError?: (message: string) => void;
 }
 
 /**
@@ -71,52 +75,80 @@ export interface LivePreviewOptions {
  * main.ts wires this.
  */
 export function cdLivePreviewExtension(opts: LivePreviewOptions) {
-  return ViewPlugin.fromClass(
-    class implements PluginValue {
-      decorations: DecorationSet = Decoration.none;
-
-      constructor(view: EditorView) {
-        this.recompute(view);
-      }
-
-      update(update: ViewUpdate): void {
-        if (
-          update.docChanged ||
-          update.viewportChanged ||
-          update.selectionSet ||
-          update.focusChanged
-        ) {
-          this.recompute(update.view);
-        }
-      }
-
-      /** Re-scan the document for ```cd blocks and (re)build decorations. */
-      recompute(view: EditorView): void {
-        const doc = view.state.doc;
-        const head = view.state.selection.main.head;
-        const headLine = doc.lineAt(head).number - 1; // 0-indexed
-
-        const blocks = findCdBlocks(doc);
-        const decos: Range<Decoration>[] = [];
-        for (const block of blocks) {
-          // While the cursor sits inside the block, show raw source (Obsidian's
-          // own behavior for fenced code) — skip the widget entirely.
-          if (headLine >= block.start && headLine <= block.end) continue;
-          decos.push(
-            Decoration.replace({
-              block: true,
-              widget: new CdWidget(block, doc, opts),
-            }).range(
-              doc.line(block.start + 1).from,
-              doc.line(block.end + 1).to,
-            ),
-          );
-        }
-        this.decorations = Decoration.set(decos, true);
-      }
+  // Block widgets (Decoration.replace with block: true) MUST be provided by a
+  // StateField, not a ViewPlugin. CM6 throws
+  //   "Block decorations may not be specified via plugins"
+  // when a ViewPlugin's decorations include a block widget — because plugin
+  // decorations are applied AFTER viewport computation and aren't allowed to
+  // affect vertical layout. That throw escapes into Obsidian's note-load and
+  // surfaces as "Failed to load note" whenever the cursor is OUTSIDE a cd
+  // block on (re)open (the only time the widget is actually built). A StateField
+  // provides its decorations DIRECTLY, which CM6 permits to contain block
+  // widgets. This was the root cause of the reopen crash.
+  return StateField.define<DecorationSet>({
+    create(state) {
+      return buildDecorations(state, opts);
     },
-    { decorations: (v) => v.decorations },
-  );
+    update(decos, tr) {
+      // The widget depends only on the document and the cursor line. Rebuild
+      // when either changes; otherwise reuse the previous set (cheap).
+      if (tr.docChanged || tr.selection) {
+        return buildDecorations(tr.state, opts);
+      }
+      return decos;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+/**
+ * Build the decoration set for the current state: one block-replace widget per
+ * ```cd block whose line range does NOT contain the cursor (while the cursor is
+ * inside a block, Obsidian shows the raw source, matching its own fenced-code
+ * behavior). Fully guarded: any throw falls back to Decoration.none (the raw
+ * block shows, note still opens) and reports the cause via opts.onError.
+ */
+function buildDecorations(state: EditorState, opts: LivePreviewOptions): DecorationSet {
+  try {
+    const doc = state.doc;
+    const head = state.selection.main.head;
+    const headLine = doc.lineAt(head).number - 1; // 0-indexed
+
+    const blocks = findCdBlocks(doc);
+    const decos: Range<Decoration>[] = [];
+    for (const block of blocks) {
+      // While the cursor sits inside the block, show raw source (Obsidian's
+      // own behavior for fenced code) — skip the widget entirely.
+      if (headLine >= block.start && headLine <= block.end) continue;
+      decos.push(
+        Decoration.replace({
+          block: true,
+          widget: new CdWidget(block, doc, opts),
+        }).range(
+          doc.line(block.start + 1).from,
+          doc.line(block.end + 1).to,
+        ),
+      );
+    }
+    return Decoration.set(decos, true);
+  } catch (err) {
+    // Never let a decoration-build throw escape into CM6/Obsidian's note load —
+    // fall back to no decorations (the raw ```cd block shows) and surface the
+    // cause so it can be diagnosed.
+    const msg = `cd (Live Preview): ${(err as Error)?.message || String(err)}`;
+    try {
+      // eslint-disable-next-line no-console
+      console.error(msg, err);
+    } catch {
+      // ignore
+    }
+    try {
+      opts.onError?.(msg);
+    } catch {
+      // reporting itself must never throw
+    }
+    return Decoration.none;
+  }
 }
 
 /**
@@ -208,12 +240,20 @@ class CdWidget extends WidgetType {
     }
 
     // Placeholder while the SVG renders; replaced once MathJax typesets.
-    const placeholder = wrap.createEl("div", { cls: "cd-lp-placeholder" });
-    placeholder.textContent = "···";
-    wrap.appendChild(placeholder);
-
-    void this.renderInto(wrap, placeholder, model, view);
-
+    // Wrap the DOM wiring so a throw here can never escape into CM6's widget
+    // build (which would break the note open in Live Preview).
+    try {
+      const placeholder = wrap.createEl("div", { cls: "cd-lp-placeholder" });
+      placeholder.textContent = "···";
+      wrap.appendChild(placeholder);
+      void this.renderInto(wrap, placeholder, model, view);
+    } catch (err) {
+      const msg = wrap.createEl("div", {
+        cls: "cd-error",
+        text: `cd: ${(err as Error).message}`,
+      });
+      msg.setAttribute("role", "alert");
+    }
     return wrap;
   }
 
@@ -238,14 +278,27 @@ class CdWidget extends WidgetType {
       msg.setAttribute("role", "alert");
       return;
     }
-    if (!view.dom.isConnected) return; // editor gone
-    placeholder.remove();
-    if (svg) {
-      wrap.appendChild(svg);
-      // §8.3: shared click-vs-hover-to-edit affordance (same as Reading view).
-      attachEditAffordance(wrap, svg, this.opts.getClickToEdit(), () => {
-        if (svg) this.opts.onEdit(view, this.block, model, svg);
+    // Everything from here on is post-await DOM wiring. Wrap it so a throw
+    // (e.g. the editor being torn down mid-render, or a transient DOM state)
+    // can never escape as an unhandled rejection — which in Live Preview
+    // surfaces as a "Failed to load note" error and blocks the whole note.
+    try {
+      if (!view.dom.isConnected) return; // editor gone
+      placeholder.remove();
+      if (svg) {
+        wrap.appendChild(svg);
+        // §8.3: shared click-vs-hover-to-edit affordance (same as Reading view).
+        attachEditAffordance(wrap, svg, this.opts.getClickToEdit(), () => {
+          if (svg) this.opts.onEdit(view, this.block, model, svg);
+        });
+      }
+    } catch (err) {
+      placeholder.remove();
+      const msg = wrap.createEl("div", {
+        cls: "cd-error",
+        text: `cd: render failed — ${(err as Error).message}`,
       });
+      msg.setAttribute("role", "alert");
     }
   }
 

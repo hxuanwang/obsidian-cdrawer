@@ -63,6 +63,17 @@ export default class CommutativeDiagramPlugin extends Plugin {
       renderLabel: makeLabelRenderer(activeWindow().document, () => this.settings.labelScale),
       getClickToEdit: () => this.settings.clickToEdit,
       onEdit: (view, block, model, svg) => this.onEditLivePreview(view, block, model, svg),
+      // Surface decoration-build errors as a toast (and console) so a plugin
+      // bug never blocks note open; the note falls back to showing the raw block.
+      onError: (msg) => {
+        // eslint-disable-next-line no-console
+        console.error(msg);
+        try {
+          new Notice(msg, 10000);
+        } catch {
+          // Notice unavailable (tests) — console.error above is enough
+        }
+      },
     }));
 
     // --- Phase 4: settings tab (§8.3) ---
@@ -357,11 +368,24 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // editing, no extra button. On commit we rewrite the block's source range.
     // Phase 4 (§8.3): the click-vs-hover-to-edit affordance is shared with Live
     // Preview via attachEditAffordance, driven by the clickToEdit setting.
-    const section = ctx.getSectionInfo?.(el) ?? null;
-    if (svg) {
-      attachEditAffordance(el, svg, this.settings.clickToEdit, () => {
-        this.openEditorForExisting(model, ctx.sourcePath, section, svg);
+    //
+    // This tail runs AFTER the render try/catch — wrap it so a throw (e.g.
+    // getSectionInfo on a not-yet-cached note, or a transient DOM state) can
+    // never escape the processor as an unhandled rejection, which Obsidian can
+    // surface as a failed note load.
+    try {
+      const section = ctx.getSectionInfo?.(el) ?? null;
+      if (svg) {
+        attachEditAffordance(el, svg, this.settings.clickToEdit, () => {
+          this.openEditorForExisting(model, ctx.sourcePath, section, svg);
+        });
+      }
+    } catch (err) {
+      const msg = el.createEl("div", {
+        cls: "cd-error",
+        text: `cd: ${(err as Error).message}`,
       });
+      msg.setAttribute("role", "alert");
     }
   }
 
