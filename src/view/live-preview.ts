@@ -137,12 +137,6 @@ function buildDecorations(state: EditorState, opts: LivePreviewOptions): Decorat
     // cause so it can be diagnosed.
     const msg = `cd (Live Preview): ${(err as Error)?.message || String(err)}`;
     try {
-      // eslint-disable-next-line no-console
-      console.error(msg, err);
-    } catch {
-      // ignore
-    }
-    try {
       opts.onError?.(msg);
     } catch {
       // reporting itself must never throw

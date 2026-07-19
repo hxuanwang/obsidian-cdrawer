@@ -63,15 +63,13 @@ export default class CommutativeDiagramPlugin extends Plugin {
       renderLabel: makeLabelRenderer(activeWindow().document, () => this.settings.labelScale),
       getClickToEdit: () => this.settings.clickToEdit,
       onEdit: (view, block, model, svg) => this.onEditLivePreview(view, block, model, svg),
-      // Surface decoration-build errors as a toast (and console) so a plugin
-      // bug never blocks note open; the note falls back to showing the raw block.
+      // Surface decoration-build errors as a toast so a plugin bug never
+      // blocks note open; the note falls back to showing the raw block.
       onError: (msg) => {
-        // eslint-disable-next-line no-console
-        console.error(msg);
         try {
           new Notice(msg, 10000);
         } catch {
-          // Notice unavailable (tests) — console.error above is enough
+          // Notice unavailable (e.g. in tests) — nothing else to do safely
         }
       },
     }));
