@@ -60,7 +60,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
     // grid editor as Reading view; on commit we dispatch a CM6 transaction
     // replacing the block's text range, so undo/redo/sync stay correct.
     this.registerEditorExtension(cdLivePreviewExtension({
-      renderLabel: makeLabelRenderer(activeWindow().document),
+      renderLabel: makeLabelRenderer(activeWindow().document, () => this.settings.labelScale),
       getClickToEdit: () => this.settings.clickToEdit,
       onEdit: (view, block, model, svg) => this.onEditLivePreview(view, block, model, svg),
     }));
@@ -169,7 +169,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
       document: activeDocument(this.app),
       model: freshModel(this.settings.defaultRows, this.settings.defaultCols),
       anchor,
-      renderLabel: makeLabelRenderer(activeDocument(this.app)),
+      renderLabel: makeLabelRenderer(activeDocument(this.app), () => 1),
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
@@ -336,10 +336,11 @@ export default class CommutativeDiagramPlugin extends Plugin {
     try {
       svg = await renderDiagramAsync(model, {
         document: el.doc,
+        labelScale: this.settings.labelScale,
         // §4: labels are raw LaTeX rendered via Obsidian's built-in MathJax
         // (renderMath from the `obsidian` module), not plain text. Without this
         // \phi / X^{n} render literally instead of as math glyphs.
-        renderLabel: makeLabelRenderer(el.doc),
+        renderLabel: makeLabelRenderer(el.doc, () => this.settings.labelScale),
       });
       el.appendChild(svg);
     } catch (err) {
@@ -390,7 +391,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
       document: doc,
       model,
       anchor,
-      renderLabel: makeLabelRenderer(doc),
+      renderLabel: makeLabelRenderer(doc, () => 1),
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
@@ -443,7 +444,7 @@ export default class CommutativeDiagramPlugin extends Plugin {
       document: doc,
       model,
       anchor,
-      renderLabel: makeLabelRenderer(doc),
+      renderLabel: makeLabelRenderer(doc, () => 1),
       defaultHead: this.settings.defaultHead,
       defaultLineStyle: this.settings.defaultLineStyle,
       showPreview: this.settings.showPreview,
@@ -521,10 +522,51 @@ export default class CommutativeDiagramPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    // Migrate older saved settings that predate the labelScale setting: default
+    // to 0.95 (the "100%" default — renders at 0.95× native CD) rather than
+    // undefined. A previously-saved finite value is kept as-is.
+    if (typeof this.settings.labelScale !== "number" || !Number.isFinite(this.settings.labelScale)) {
+      this.settings.labelScale = 0.95;
+    }
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * Re-render every open diagram at the current labelScale (the label-size
+   * setting). Reading-view diagrams are rebuilt by re-running the block
+   * processor; Live Preview widgets re-render via a CM6 dispatch that re-runs
+   * the ViewPlugin. (The grid editor's own cells + live preview are NOT
+   * affected — they keep their native sizing per the user's request; only
+   * the committed/rendered diagrams honour the label-size setting.)
+   */
+  refreshDiagrams(): void {
+    // Reading view: re-run the `cd` block processor on each open note. The
+    // post processor rebuilds the SVG from the (now rescaled) label renderer.
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = viewOfLeaf(leaf);
+      view?.previewMode?.rerender();
+    }
+    // Live Preview: a no-op transaction on each markdown editor forces the
+    // ViewPlugin to recompute decorations (the widgets re-render with the new
+    // scale). Dispatching an empty viewport update is enough; we use a timer
+    // flag-free no-op change via updateOptions-free path: force a re-scan by
+    // toggling the extension set would be heavier, so instead nudge each view.
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = viewOfLeaf(leaf);
+      const cm = view?.editor && (view.editor as unknown as { cm?: EditorView }).cm;
+      if (cm) {
+        // A no-op selection dispatch triggers update() → recompute() in the
+        // ViewPlugin, rebuilding widgets with the live labelScale.
+        try {
+          cm.dispatch({ selection: cm.state.selection });
+        } catch {
+          // ignore — view may be in an odd state
+        }
+      }
+    }
   }
 }
 
@@ -532,6 +574,11 @@ export default class CommutativeDiagramPlugin extends Plugin {
 function activeDocument(app: App): Document {
   const view = app.workspace.getActiveViewOfType(MarkdownView);
   return (view?.containerEl?.ownerDocument ?? activeWindow().document);
+}
+
+/** Best-effort MarkdownView for a workspace leaf (used by refreshDiagrams). */
+function viewOfLeaf(leaf: { view?: unknown }): MarkdownView | null {
+  return leaf.view instanceof MarkdownView ? leaf.view : null;
 }
 
 function activeWindow(): Window {
@@ -607,10 +654,15 @@ function cmRangeAnchor(view: EditorView, from: number, to: number): { x: number;
  * renders, so the arrow shaft — clipped to the (too-small) measured box — starts
  * inside the real label and overlaps it. Short labels hide the discrepancy
  * because their width error is small.
+ *
+ * `getLabelScale` (the label-size setting, §8.3) is read on EACH render so the
+ * pinned font-size tracks the setting live — a getter rather than a captured
+ * number because the Live Preview extension is registered once at load but must
+ * honour later setting changes. 1.0 = match native CD exactly (§6.4).
  */
-function makeLabelRenderer(doc: Document): LabelRenderer {
-  const metrics = getCDStyleMetrics(doc);
+function makeLabelRenderer(doc: Document, getLabelScale: () => number = () => 1): LabelRenderer {
   return (latex: string): HTMLElement => {
+    const metrics = getCDStyleMetrics(doc, { labelScale: getLabelScale() });
     const host = doc.createElement("div");
     host.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
     host.className = "cd-rendered-label";

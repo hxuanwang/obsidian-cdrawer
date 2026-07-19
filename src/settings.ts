@@ -16,6 +16,7 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type CommutativeDiagramPlugin from "./main";
 import { DEFAULT_HEAD, DEFAULT_LINE, type ArrowHead, type LineStyle } from "./diagram/model";
+import { clampLabelScale } from "./diagram/cd-style-metrics";
 import type { EditorMode } from "./editor/GridEditor";
 
 export interface CDSettings {
@@ -46,6 +47,15 @@ export interface CDSettings {
    * The user can still switch live via the mode toggle in the editor chrome.
    */
   editorMode: EditorMode;
+  /**
+   * Label-size multiplier for rendered diagrams (the "label size" setting),
+   * as a fraction of native `\begin{CD}`. The DEFAULT (0.95) is what the user
+   * wants labelled "100%" — i.e. 100% on the slider renders at 0.95× native CD.
+   * Range [0.475, 1.425] maps to the slider's 50%–150%. Existing diagrams
+   * re-render at the new size on change. (The grid editor's own cells + preview
+   * are unaffected — they keep native sizing.)
+   */
+  labelScale: number;
 }
 
 export const DEFAULT_SETTINGS: CDSettings = {
@@ -56,6 +66,8 @@ export const DEFAULT_SETTINGS: CDSettings = {
   clickToEdit: false,
   showPreview: true,
   editorMode: "float",
+  // 0.95× native CD — shown as "100%" on the slider (the size the user picked).
+  labelScale: 0.95,
 };
 
 const HEADS: { value: ArrowHead; label: string }[] = [
@@ -74,6 +86,29 @@ const LINES: { value: LineStyle; label: string }[] = [
 
 const MIN_DIM = 1;
 const MAX_DIM = 20;
+
+/**
+ * The label-size slider operates in whole percentage points (50–150, step 5,
+ * default 100) for a clean UX, then converts to a render scale. 100% on the
+ * slider = the user's chosen default size = 0.95× native `\begin{CD}` (the size
+ * previously shown at "95%"). So: renderScale = pct / 100 * LABEL_SCALE_AT_100.
+ */
+const LABEL_PCT_MIN = 50;
+const LABEL_PCT_MAX = 150;
+const LABEL_PCT_STEP = 5;
+const LABEL_PCT_DEFAULT = 100;
+/** Render-scale that corresponds to "100%" on the slider. */
+const LABEL_SCALE_AT_100 = 0.95;
+
+/** Slider percentage → render scale. */
+function pctToScale(pct: number): number {
+  return (pct / 100) * LABEL_SCALE_AT_100;
+}
+
+/** Render scale → slider percentage (rounded to the step). */
+function scaleToPct(scale: number): number {
+  return Math.round((scale / LABEL_SCALE_AT_100) * 100);
+}
 
 export class CDSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly plugin: CommutativeDiagramPlugin) {
@@ -138,6 +173,46 @@ export class CDSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    // Label size (§8.3 feature request). The slider runs in whole percentage
+    // points 50–150 (step 5, default 100); 100% is the user's chosen default
+    // size, which renders at 0.95× native `\begin{CD}` (the size previously
+    // shown at "95%"). Existing diagrams re-render live on change.
+    //
+    // The live "%" readout is rendered manually (a <span> next to the slider)
+    // rather than via SliderComponent.setDisplayFormat / setInstant, which are
+    // gated to Obsidian 1.13.0 / 1.6.6 respectively — this plugin's
+    // minAppVersion is 1.4.0, so those methods can be absent and would throw
+    // partway through building this Setting (aborting display() and hiding the
+    // settings below this one). `onChange` fires on release, which is fine.
+    const labelSize = new Setting(containerEl)
+      .setName("Label size")
+      .setDesc(
+        "Size of labels in rendered diagrams. 100% = default; range 50%–150%. " +
+          "Existing diagrams update on change.",
+      );
+    const valueLabel = containerEl.createEl("span", {
+      cls: "cd-setting-value",
+      text: `${scaleToPct(this.plugin.settings.labelScale)}%`,
+    });
+    labelSize.addSlider((s) => {
+      s.setLimits(LABEL_PCT_MIN, LABEL_PCT_MAX, LABEL_PCT_STEP);
+      s.setValue(scaleToPct(this.plugin.settings.labelScale));
+      // Register onChange FIRST so it can never be skipped by a later throw.
+      s.onChange(async (pct) => {
+        const scale = clampLabelScale(pctToScale(pct));
+        this.plugin.settings.labelScale = scale;
+        valueLabel.textContent = `${scaleToPct(scale)}%`;
+        await this.plugin.saveSettings();
+        // Re-render every open diagram at the new size immediately.
+        this.plugin.refreshDiagrams();
+      });
+      // Live readout while dragging (input event fires on every move).
+      s.sliderEl.addEventListener("input", () => {
+        valueLabel.textContent = `${s.getValue()}%`;
+      });
+    });
+    labelSize.controlEl.appendChild(valueLabel);
 
     new Setting(containerEl)
       .setName("Click to edit diagrams")

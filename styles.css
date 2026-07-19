@@ -1,5 +1,15 @@
 /* cdrawer styles */
 
+/* Live percentage readout next to the label-size slider in settings.
+   SliderComponent's built-in value display (setDisplayFormat) is gated to
+   Obsidian 1.13.0, above this plugin's minAppVersion, so we render it manually. */
+.cd-setting-value {
+  min-width: 3.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
 .cd-diagram-svg {
   display: inline-block;
   background: transparent;

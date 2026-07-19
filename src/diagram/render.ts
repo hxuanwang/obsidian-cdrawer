@@ -154,8 +154,16 @@ export interface DiagramLayout {
 }
 
 export interface RenderOptions {
-  /** Style metrics; defaults to getCDStyleMetrics() (measured, cached). */
+  /** Style metrics; defaults to getCDStyleMetrics(doc, {labelScale}) (measured,
+   *  cached). Pass this to override measurement entirely (e.g. in tests). */
   metrics?: CDStyleMetrics;
+  /**
+   * User-facing label-size multiplier (the label-size setting, §8.3). Applied
+   * only when `metrics` is NOT also supplied — the explicit metrics win so
+   * tests that pass deterministic metrics aren't rescaled. Defaults to 1
+   * (match native CD exactly, §6.4).
+   */
+  labelScale?: number;
   /** Label renderer; defaults to window.renderMath with a text fallback. */
   renderLabel?: LabelRenderer;
   /** Label measurer; defaults to measuring renderLabel output offscreen. */
@@ -472,7 +480,7 @@ export function renderDiagram(model: DiagramModel, opts: RenderOptions = {}): SV
   if (!doc) {
     throw new Error("renderDiagram requires a DOM document (pass opts.document)");
   }
-  const metrics = opts.metrics ?? getCDStyleMetrics(doc);
+  const metrics = opts.metrics ?? getCDStyleMetrics(doc, { labelScale: opts.labelScale ?? 1 });
   const renderLabel = opts.renderLabel ?? defaultLabelRenderer(doc, metrics);
 
   const { layout, elementFor } = prepareLayout(model, opts, doc, metrics, renderLabel);
@@ -493,7 +501,7 @@ export async function renderDiagramAsync(
   if (!doc) {
     throw new Error("renderDiagram requires a DOM document (pass opts.document)");
   }
-  const metrics = opts.metrics ?? getCDStyleMetrics(doc);
+  const metrics = opts.metrics ?? getCDStyleMetrics(doc, { labelScale: opts.labelScale ?? 1 });
   const renderLabel = opts.renderLabel ?? defaultLabelRenderer(doc, metrics);
 
   // Mount prototypes and wait for MathJax to fill them before measuring.
