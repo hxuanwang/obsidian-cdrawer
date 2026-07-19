@@ -17,7 +17,7 @@ they live in plain text in your vault, diff cleanly, and survive sync/undo. You
 can also **export to [tikz-cd](https://ctan.org/pkg/tikz-cd)** or plain AMS `CD`
 for use in a paper, and **import** either back into an editable diagram.
 
-> **Status:** v1.1.1 Display (rendering existing diagrams) works on desktop and
+> **Status:** v1.1.2 Display (rendering existing diagrams) works on desktop and
 > mobile. The grid **editor** is desktop-only for now — see
 > [Mobile](#mobile).
 
@@ -32,6 +32,12 @@ for use in a paper, and **import** either back into an editable diagram.
 >   closed with its own **×** button.
 > - **+row / +col** buttons reveal on hovering near the grid's bottom / right
 >   edge instead of being always visible.
+> - **Delete** the selected arrow with the `Delete` / `Backspace` key, or the
+>   whole diagram with the top-bar **Delete** button.
+> - **Drag an arrow's label** to nudge it off a crossing shaft; reset it from
+>   the properties popover.
+> - Long labels (e.g. `A\otimes B\otimes C`) no longer overlap their arrows in
+>   the committed diagram.
 
 ---
 
@@ -104,8 +110,12 @@ Then in the grid:
   toggle, curve, delete. **Curve an arrow** either by dragging the small handle
   that appears at its midpoint when selected (drag perpendicular to the shaft)
   or with the Curve slider in the popover; + bulges left of the arrow's travel,
-  − right (and a "Straighten" button resets it). The popover has its own close
-  button and can be dragged anywhere, including outside the editor window.
+  − right (and a "Straighten" button resets it). **Drag a selected arrow's
+  label** to nudge it to a better spot (e.g. off a crossing shaft); a "Reset
+  label position" button in the popover puts it back. The popover has its own
+  close button and can be dragged anywhere, including outside the editor window.
+- **Delete** the selected arrow with the **`Delete`** or **`Backspace`** key
+  (undoable, like every edit).
 - **Undo / redo** any edit with the **Undo** / **Redo** buttons in the top bar,
   or `Ctrl/Cmd+Z` / `Ctrl/Cmd+Shift+Z` (`Ctrl+Y` also redoes).
 - **Switch editor mode** with the small window icon in the top bar — float
@@ -119,8 +129,10 @@ Then in the grid:
   delete a label or arrow endpoint — are hidden, so you can't nuke content by
   accident).
 - **Commit** by clicking outside the overlay or pressing **Escape**. The only way
-  to **discard** is the explicit **Discard** button — a stray Escape never loses
-  work. An entirely empty draft commits nothing (no empty block is written).
+  to **discard** the edit session (leaving the stored diagram untouched) is the
+  explicit **Discard** button — a stray Escape never loses work. The top-bar
+  **Delete** button removes the diagram from the note entirely (with a confirm);
+  an entirely empty draft commits nothing (no empty block is written).
 
 While editing, a **live preview** beneath the grid shows the rendered diagram —
 the same SVG that will be committed.
@@ -173,6 +185,7 @@ pretty-printed JSON:
 | `arrows[].lineStyle` | `"solid"` (default) \| `"dashed"` \| `"dotted"`. |
 | `arrows[].bidirectional` | `true` renders a double-headed arrow (`<->`), for isomorphisms/equivalences. |
 | `arrows[].curve` | Signed `-1`…`1`; `0` (omitted) = straight shaft. The magnitude is how far the arc's apex deviates from the chord (as a fraction of its length); positive bulges left of the arrow's direction of travel (matching tikz-cd's `bend left`), negative right. Set by dragging the arrow's midpoint handle or the Curve slider. |
+| `arrows[].labelOffset` | Optional `{ x, y }` manual nudge for the label, in fractions of the font size, applied on top of the auto placement. `{0,0}` (omitted) = no adjustment. Set by dragging a selected arrow's label; "Reset label position" in the popover clears it. |
 
 Multiple arrows between the same pair of cells are offset symmetrically. The
 schema is additive-only across versions (new fields are optional), so existing
