@@ -442,8 +442,7 @@ export class GridEditor {
       if (!dragging) return;
       const left = originLeft + (e.clientX - startX);
       const top = originTop + (e.clientY - startY);
-      this.root.style.left = `${left}px`;
-      this.root.style.top = `${top}px`;
+      this.root.setCssStyles({ left: `${left}px`, top: `${top}px` });
     };
     const onUp = () => {
       if (!dragging) return;
@@ -479,7 +478,7 @@ export class GridEditor {
     for (const edge of edges) {
       const handle = this.doc.createElement("div");
       handle.className = `cd-resize-handle cd-resize-${edge.dir}`;
-      handle.style.cursor = edge.cursor;
+      handle.setCssProps({ cursor: edge.cursor });
       handle.addEventListener("pointerdown", (e) => this.beginResize(e, edge.dir, MIN_W, MIN_H));
       this.root.appendChild(handle);
     }
@@ -495,10 +494,12 @@ export class GridEditor {
 
     // Pin the current size/position in pixels so subsequent style writes are
     // absolute (independent of the viewport-relative defaults in styles.css).
-    this.root.style.width = `${rect.width}px`;
-    this.root.style.height = `${rect.height}px`;
-    this.root.style.left = `${rect.left}px`;
-    this.root.style.top = `${rect.top}px`;
+    this.root.setCssStyles({
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+    });
 
     const n = dir.includes("n");
     const s = dir.includes("s");
@@ -522,10 +523,12 @@ export class GridEditor {
         height = Math.max(minH, rect.height - dy);
         top = rect.top + (rect.height - height);
       }
-      this.root.style.width = `${width}px`;
-      this.root.style.height = `${height}px`;
-      this.root.style.left = `${left}px`;
-      this.root.style.top = `${top}px`;
+      this.root.setCssStyles({
+        width: `${width}px`,
+        height: `${height}px`,
+        left: `${left}px`,
+        top: `${top}px`,
+      });
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -538,8 +541,7 @@ export class GridEditor {
   private position(): void {
     const rect = this.root.getBoundingClientRect();
     const { left, top } = placeNear(this.anchor.x, this.anchor.y, rect.width, rect.height);
-    this.root.style.left = `${left}px`;
-    this.root.style.top = `${top}px`;
+    this.root.setCssStyles({ left: `${left}px`, top: `${top}px` });
   }
 
   /** Toggle between the float-window and embedded (in-flow, page-embedded)
@@ -750,8 +752,7 @@ export class GridEditor {
     const t = trigger.getBoundingClientRect();
     const left = Math.max(8, Math.min(t.left - rootRect.left, rootRect.width - pop.offsetWidth - 8));
     const top = t.bottom - rootRect.top + 4;
-    pop.style.left = `${left}px`;
-    pop.style.top = `${top}px`;
+    pop.setCssStyles({ left: `${left}px`, top: `${top}px` });
   }
 
   /** Toggle the Import popover open/closed. */
@@ -900,8 +901,10 @@ export class GridEditor {
 
   private renderGrid(): void {
     this.gridEl.empty();
-    this.gridEl.style.gridTemplateColumns = `repeat(${this.model.cols}, 1fr)`;
-    this.gridEl.style.gridTemplateRows = `repeat(${this.model.rows}, 1fr)`;
+    this.gridEl.setCssStyles({
+      gridTemplateColumns: `repeat(${this.model.cols}, 1fr)`,
+      gridTemplateRows: `repeat(${this.model.rows}, 1fr)`,
+    });
 
     for (let r = 0; r < this.model.rows; r++) {
       for (let c = 0; c < this.model.cols; c++) {
@@ -920,14 +923,18 @@ export class GridEditor {
       this.commitModel(appendRow(this.model));
       this.rerenderAll();
     });
-    addRow.style.gridRow = `${this.model.rows + 1}`;
-    addRow.style.gridColumn = `1 / ${this.model.cols + 1}`;
+    addRow.setCssStyles({
+      gridRow: `${this.model.rows + 1}`,
+      gridColumn: `1 / ${this.model.cols + 1}`,
+    });
     const addCol = this.makeAddButton("cd-add-col", "+ col", () => {
       this.commitModel(appendCol(this.model));
       this.rerenderAll();
     });
-    addCol.style.gridRow = `1 / ${this.model.rows + 1}`;
-    addCol.style.gridColumn = `${this.model.cols + 1}`;
+    addCol.setCssStyles({
+      gridRow: `1 / ${this.model.rows + 1}`,
+      gridColumn: `${this.model.cols + 1}`,
+    });
     this.gridEl.appendChild(addRow);
     this.gridEl.appendChild(addCol);
     this.attachAddButtonHover();
@@ -1964,15 +1971,13 @@ export class GridEditor {
     if (this.propertiesOffset) {
       const left = clampViewport(this.propertiesOffset.left, popRect.width, vw);
       const top = clampViewport(this.propertiesOffset.top, popRect.height, vh);
-      this.propertiesEl.style.left = `${left}px`;
-      this.propertiesEl.style.top = `${top}px`;
+      this.propertiesEl.setCssStyles({ left: `${left}px`, top: `${top}px` });
       return;
     }
     const rootRect = this.root.getBoundingClientRect();
     const left = clampViewport(rootRect.right - popRect.width - 12, popRect.width, vw);
     const top = clampViewport(rootRect.bottom - popRect.height - 12, popRect.height, vh);
-    this.propertiesEl.style.left = `${left}px`;
-    this.propertiesEl.style.top = `${top}px`;
+    this.propertiesEl.setCssStyles({ left: `${left}px`, top: `${top}px` });
   }
 
   private closeProperties(): void {
@@ -2022,8 +2027,7 @@ export class GridEditor {
       let top = originTop + (e.clientY - startY);
       left = clampViewport(left, popRect.width, vw);
       top = clampViewport(top, popRect.height, vh);
-      panel.style.left = `${left}px`;
-      panel.style.top = `${top}px`;
+      panel.setCssStyles({ left: `${left}px`, top: `${top}px` });
       this.propertiesOffset = { left, top };
     };
     const onUp = () => {
