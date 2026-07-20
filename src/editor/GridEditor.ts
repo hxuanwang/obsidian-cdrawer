@@ -94,6 +94,27 @@ const MIN_DIM = 1;
  */
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+/**
+ * Whether a keydown target is an editable text field that should own
+ * Delete/Backspace for text editing (and so the editor must NOT hijack those
+ * keys to delete a selected arrow). Covers the cell label input (also guarded
+ * via editingCell) and the arrow-properties popover's Label field, which is a
+ * separate body-mounted <input> with no editing-state tracking.
+ */
+function isTextEditableTarget(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement) {
+    return !target.disabled && !target.readOnly;
+  }
+  if (target instanceof HTMLInputElement) {
+    const type = (target.type || "text").toLowerCase();
+    // Only text-like inputs use Delete/Backspace; checkbox/range do not.
+    const textLike = ["text", "search", "url", "email", "tel", "password", "number"];
+    return textLike.includes(type) && !target.disabled && !target.readOnly;
+  }
+  if (target instanceof HTMLElement) return target.isContentEditable;
+  return false;
+}
+
 /** Build a 16×16 stroke icon <svg> via DOM APIs (not an innerHTML string, which
  *  the Obsidian lint rule forbids). `children` are [tag, attrs] tuples. */
 function buildIcon(doc: Document, children: [string, Record<string, string>][]): SVGSVGElement {
@@ -2221,9 +2242,17 @@ export class GridEditor {
       else this.redo();
       return;
     }
-    // Delete / Backspace removes the selected arrow (when no cell label is being
-    // edited — otherwise the input owns those keys for text editing).
-    if ((e.key === "Delete" || e.key === "Backspace") && !this.editingCell) {
+    // Delete / Backspace removes the selected arrow, but only when no text field
+    // owns those keys for editing. The cell label input is tracked via
+    // editingCell; the arrow-properties popover's Label field is a separate
+    // body-mounted <input> that isn't, so check the event target directly too —
+    // otherwise pressing Delete/Backspace to edit the arrow's label text would
+    // delete the whole arrow instead.
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      !this.editingCell &&
+      !isTextEditableTarget(e.target)
+    ) {
       if (this.selectedArrowId) {
         e.preventDefault();
         e.stopPropagation();
