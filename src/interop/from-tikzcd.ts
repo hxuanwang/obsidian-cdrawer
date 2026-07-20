@@ -50,11 +50,22 @@ export function fromTikzcd(source: string): DiagramModel {
       const { label, arrowSpecs } = parseCell(rawCells[c]);
       if (label !== "") cells.push({ row: r, col: c, label });
       for (const spec of arrowSpecs) {
-        const d = resolveDirection(spec.dir, r, c);
-        if (!d) continue;
+        // Resolve the arrow's endpoints. Explicit `from=`/`to=` coordinates
+        // (the `from=R-C`/`to=R-C` form, common in tikz-cd exported by GUI
+        // editors) take precedence and let an arrow sit on any cell regardless
+        // of its physical attachment. Otherwise we fall back to the cell the
+        // `\arrow` is attached to as the source, with direction letters giving
+        // the target. An arrow with neither a resolvable `to` nor direction
+        // letters is dropped (it points nowhere).
+        const from = spec.from ?? { row: r, col: c };
+        let to: { row: number; col: number } | null = spec.to ?? null;
+        if (!to) {
+          to = resolveDirection(spec.dir, r, c);
+        }
+        if (!to) continue;
         arrows.push({
-          from: { row: r, col: c },
-          to: d,
+          from,
+          to,
           label: spec.label,
           labelPosition: spec.labelPosition,
           head: spec.head,
@@ -151,6 +162,12 @@ interface ArrowSpec {
   lineStyle?: LineStyle;
   bidirectional?: boolean;
   curve?: number;
+  /** Explicit absolute source, from `from=R-C` (already 0-indexed model coords).
+   *  When set, overrides the cell the `\arrow` is physically attached to. */
+  from?: { row: number; col: number };
+  /** Explicit absolute target, from `to=R-C` (already 0-indexed model coords).
+   *  When set, overrides the direction-letter resolution. */
+  to?: { row: number; col: number };
 }
 
 interface ParsedCell {
@@ -164,9 +181,9 @@ function parseCell(cell: string): ParsedCell {
   // Find the first `\arrow` / `\ar` token; the label is whatever precedes it.
   const first = searchArrow(cell, 0);
   if (first === -1) {
-    return { label: cell.trim(), arrowSpecs };
+    return { label: stripGrouping(cell.trim()), arrowSpecs };
   }
-  const label = cell.slice(0, first).trim();
+  const label = stripGrouping(cell.slice(0, first).trim());
   let i = first;
   while (i !== -1 && i < cell.length) {
     // Advance past the `\arrow` / `\ar` command itself.
@@ -299,6 +316,25 @@ function parseOptionList(inside: string): ArrowSpec {
         spec.lineStyle = "dotted";
         break;
       default: {
+        // Explicit absolute endpoint coordinates: `from=2-3` / `to=1-1`.
+        // tikz-cd numbers rows and columns from 1, so we convert to 0-indexed
+        // model coords. Either side may be given independently; an arrow that
+        // specifies both ignores its direction letters entirely (and needn't be
+        // attached to its source cell — real tikz-cd output from editors like
+        // the one in the brief dumps every `\arrow` on the last cell with
+        // `from=`/`to=`). We match `from=`/`to=` only as a key=value pair so a
+        // bare `from` anchor keyword (tikz-cd's label anchor) isn't mistaken
+        // for one.
+        const fromCoord = /^from\s*=\s*(\d+)-(\d+)$/.exec(t);
+        if (fromCoord) {
+          spec.from = { row: parseInt(fromCoord[1], 10) - 1, col: parseInt(fromCoord[2], 10) - 1 };
+          break;
+        }
+        const toCoord = /^to\s*=\s*(\d+)-(\d+)$/.exec(t);
+        if (toCoord) {
+          spec.to = { row: parseInt(toCoord[1], 10) - 1, col: parseInt(toCoord[2], 10) - 1 };
+          break;
+        }
         // bend left[=N] / bend right[=N] → signed curve. tikz-cd defaults to
         // 30° when no angle is given. We invert the to-tikzcd mapping
         // (|curve| → 10–60°): curve = (deg-10)/50, clamped to [-1,1], signed by
@@ -421,4 +457,19 @@ function balanced(s: string): boolean {
     }
   }
   return depth === 0;
+}
+
+/** Strip one outer layer of `{…}` grouping from a cell label. tikz-cd's braces
+ *  are grouping (they keep a multi-token label like `{\cong}` or `{Q}` from
+ *  being misparsed by the option parser), not part of the label text — so a
+ *  user pasting `{Q}` should get the cell label `Q`, matching how a reader
+ *  thinks of the object. Only a single *balanced* outer layer is removed, so
+ *  `f'` and `X_n` are untouched and `{{a}}` becomes `{a}` (the inner grouping
+ *  is real LaTeX content the user wrote). Mirrors from-cd's stripBraces. */
+function stripGrouping(s: string): string {
+  let t = s.trim();
+  if (t.startsWith("{") && t.endsWith("}") && balanced(t)) {
+    t = t.slice(1, -1).trim();
+  }
+  return t;
 }

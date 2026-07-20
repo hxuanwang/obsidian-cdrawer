@@ -264,6 +264,71 @@ test("from-tikzcd resolves multi-step and diagonal directions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// from-tikzcd: explicit from=/to= coordinates (GUI-editor output style)
+// ---------------------------------------------------------------------------
+
+test("from-tikzcd parses explicit from=/to= coordinates (all arrows on the last cell)", () => {
+  // Real-world shape from a GUI editor: every \arrow is dumped on the final
+  // cell (Z) with absolute matrix coordinates, and several are diagonal skips.
+  // 1-indexed tikz-cd coords map to 0-indexed model coords (row R -> R-1).
+  const tex = `\\begin{tikzcd} W &&\\\\ &{Q} & {X} \\\\ &{Y} &Z \\arrow["u", from=2-2, to=2-3] \\arrow["v",from=2-2, to=3-2] \\arrow["f",from=2-3, to=3-3] \\arrow["r",from=1-1, to=2-3] \\arrow["g",from=3-2, to=3-3] \\arrow["s",from=1-1, to=3-2] \\arrow["t",dashed, from=1-1, to=2-2] \\end{tikzcd}`;
+  const m = fromTikzcd(tex);
+  assert.equal(m.rows, 3);
+  assert.equal(m.cols, 3);
+  // Cell labels drop the tikz-cd grouping braces: {Q} -> Q, {X} -> X, {Y} -> Y.
+  assert.deepEqual(
+    m.cells.map((c) => [c.row, c.col, c.label]),
+    [
+      [0, 0, "W"],
+      [1, 1, "Q"],
+      [1, 2, "X"],
+      [2, 1, "Y"],
+      [2, 2, "Z"],
+    ],
+  );
+  assert.equal(m.arrows.length, 7);
+  const by = (lbl: string) => m.arrows.find((a) => a.label === lbl)!;
+  // u: Q(1,1) -> X(1,2)
+  assert.deepEqual(by("u").from, { row: 1, col: 1 });
+  assert.deepEqual(by("u").to, { row: 1, col: 2 });
+  // r: W(0,0) -> X(1,2) — a diagonal skip via explicit coords
+  assert.deepEqual(by("r").from, { row: 0, col: 0 });
+  assert.deepEqual(by("r").to, { row: 1, col: 2 });
+  // s: W(0,0) -> Y(2,1) — a long diagonal skip
+  assert.deepEqual(by("s").from, { row: 0, col: 0 });
+  assert.deepEqual(by("s").to, { row: 2, col: 1 });
+  // t carries the dashed line style through from the option list.
+  assert.equal(by("t").lineStyle, "dashed");
+  assert.deepEqual(by("t").from, { row: 0, col: 0 });
+  assert.deepEqual(by("t").to, { row: 1, col: 1 });
+});
+
+test("from-tikzcd from=/to= coexist with direction-letter arrows in one block", () => {
+  // The first arrow uses a direction letter (r, attached to its source A);
+  // the second uses explicit from=/to=. Both must resolve.
+  const tex = `\\begin{tikzcd} A \\arrow[r, "f"] & B \\\\ C & D \\arrow["g", from=2-1, to=2-2] \\end{tikzcd}`;
+  const m = fromTikzcd(tex);
+  assert.equal(m.arrows.length, 2);
+  const f = m.arrows.find((a) => a.label === "f")!;
+  assert.deepEqual(f.from, { row: 0, col: 0 });
+  assert.deepEqual(f.to, { row: 0, col: 1 });
+  const g = m.arrows.find((a) => a.label === "g")!;
+  assert.deepEqual(g.from, { row: 1, col: 0 });
+  assert.deepEqual(g.to, { row: 1, col: 1 });
+});
+
+test("from-tikzcd strips {…} grouping from cell labels but not inner braces", () => {
+  // {Q} -> Q (one grouping layer removed); {X_n} -> X_n (the inner subscript
+  // is content, only the outer grouping is stripped); a bare label is untouched.
+  const tex = `\\begin{tikzcd} {Q} & {X_n} & Z \\end{tikzcd}`;
+  const m = fromTikzcd(tex);
+  assert.deepEqual(
+    m.cells.map((c) => c.label),
+    ["Q", "X_n", "Z"],
+  );
+});
+
+// ---------------------------------------------------------------------------
 // to-cd: gating
 // ---------------------------------------------------------------------------
 
